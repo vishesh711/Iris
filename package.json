@@ -1,0 +1,26 @@
+{
+  "name": "iris",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal agent that holds context durably and acts on it, under supervision.",
+  "type": "module",
+  "scripts": {
+    "dev:bot": "tsx watch src/bot/index.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.33.0",
+    "pg": "^8.12.0",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.6",
+    "drizzle-kit": "^0.24.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  }
+}
