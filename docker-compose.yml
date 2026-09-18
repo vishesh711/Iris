@@ -7,7 +7,9 @@ services:
       POSTGRES_PASSWORD: iris
       POSTGRES_DB: iris
     ports:
-      - "5432:5432"
+      # Host port 5433 avoids colliding with a locally-installed Postgres
+      # (Homebrew/Postgres.app) that may already be bound to 5432.
+      - "5433:5432"
     volumes:
       - iris_pgdata:/var/lib/postgresql/data
       - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql

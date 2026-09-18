@@ -36,6 +36,10 @@ Message the bot on Telegram — it replies "got it." immediately. Text lands in 
 
 Optional: to route capture/approval/brief traffic into a Telegram supergroup's topics, create the topics and set `TELEGRAM_CAPTURE_TOPIC_ID` / `TELEGRAM_APPROVALS_TOPIC_ID` / `TELEGRAM_BRIEF_TOPIC_ID` in `.env`.
 
+### Troubleshooting
+
+`role "iris" does not exist` when running `db:migrate`, even after recreating the Docker volume: something else on your machine (Postgres.app, a Homebrew `postgresql` service) is already bound to port 5432 and is intercepting the connection before it reaches Docker. Check with `lsof -i :5432`. Iris's own Postgres runs on host port **5433** (see `docker-compose.yml`) specifically to avoid this; make sure `DATABASE_URL` in your `.env` matches (`.env.example` already does).
+
 ## Layout
 
 - `src/bot` — Telegram long-poll process. Writes events, acknowledges instantly, enqueues background work. Does no reasoning itself.
