@@ -11,7 +11,7 @@ Each milestone below reuses the existing conventions from Milestone 0/1: `record
 
 New dependencies get added incrementally per milestone (pg-boss, Ollama client, a local Whisper binary wrapper, `@xenova/transformers` for embeddings, `keytar` for OS keychain, `vitest` for tests) — never all at once.
 
-**Status:** Milestones 1 and 2 are implemented and live-verified (see below). Milestone 3 is implemented but not yet live-verified (requires a real Google OAuth credential from the user). Milestones 4–7 are planned but not yet built.
+**Status:** Milestones 1, 2, and 3 are implemented and live-verified (see below). Milestones 4–7 are planned but not yet built.
 
 ---
 
@@ -69,7 +69,7 @@ Two real prompt-quality bugs were found and fixed during this live verification 
 
 ---
 
-## Milestone 3 — Gmail and Calendar read-only ingest ✅ implemented, not yet live-verified
+## Milestone 3 — Gmail and Calendar read-only ingest ✅ implemented and live-verified
 
 **Scope (PRD: ingest tables, entities, secrets handling):** OAuth, history-API polling, upsert-on-provider-id, entity extraction.
 
@@ -96,7 +96,7 @@ Two real prompt-quality bugs were found and fixed during this live verification 
 
 **Cross-cutting landed here (easiest to silently drop):** every Gmail/Calendar-sourced `events` row gets `metadata.untrusted = true` at ingest time — nothing enforces on it until M6, but it can't be reconstructed later if skipped now. The failure-classification taxonomy becomes real; `auth` failures surface to Telegram immediately rather than letting ingest go silently quiet. External calls bounded at 10s.
 
-**Verified so far:** `npm run typecheck` and `npm test` (54 tests, 22 new) both pass. Unit tests cover the two trickiest pieces of pure logic in this milestone — Gmail message parsing (headers, multipart text extraction, missing-field handling) and Calendar event parsing (timed vs. all-day, missing attendees) — plus error classification and the recruiter heuristic. **Not yet verified live**, since it requires the user to set up a real Google Cloud OAuth credential (see README) — do that next: run the consent flow, confirm the token lands in Keychain (not `.env`), confirm a first poll backfills both tables, confirm a forced redundant poll produces zero duplicate rows, and confirm a real recruiter-ish email produces an `entities` row with `type='recruiter'`.
+**Verified:** `npm run typecheck` and `npm test` (54 tests, 22 new) both pass. Live-verified end-to-end against the user's real Google account: the OAuth consent flow completed on the first try and saved the refresh token to Keychain; the initial poll backfilled 25 real emails with zero errors; real recruiting emails (SmartRecruiters, Workday, Oracle/Goldman Sachs recruiting, Two Sigma) correctly classified as `entities.type='recruiter'` via the domain/keyword heuristic, non-recruiting senders correctly left `unknown`; every Gmail-sourced `events` row confirmed tagged `untrusted: true`; a forced redundant poll cycle left the email count at exactly 25 — no duplicates, confirming the upsert-on-`message_id` idempotency; Calendar ingest ran with zero errors and correctly returned 0 events, matching the user's actually-empty calendar (confirmed against the real Google Calendar UI, not assumed).
 
 ---
 
@@ -223,4 +223,4 @@ Each milestone section above has its own concrete test. The two checkpoints that
 
 ## Next step
 
-Live-verify Milestone 3 against a real Google account (see README's OAuth setup steps), then Milestone 4 — unified search (embeddings, hybrid retrieval, the ranking rule, the definition-of-done question).
+Milestone 4 — unified search (embeddings, hybrid retrieval, the ranking rule, the definition-of-done question). With real email and memory data now flowing (Milestones 1–3 all live-verified), this is the milestone where the PRD's own cold-start test question — "who was the recruiter... what did I decide about the rate" — first becomes answerable.
