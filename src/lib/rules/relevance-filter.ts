@@ -9,6 +9,14 @@ export interface SelectedNudge {
 
 const SYSTEM_PROMPT = `You review candidate nudges for a personal agent and decide which, if any, are actually worth interrupting the person about right now. Most days most candidates are NOT worth surfacing - be selective.
 
+A candidate is only worth surfacing when the ball is genuinely in the person's court - the other party is waiting on a reply, a decision, or an action FROM the person. Never select a candidate that is any of the following, even if it looks superficially relevant:
+- an explicit rejection or "we've decided to move forward with other candidates" - the thread is closed, there is nothing to follow up on
+- an automated acknowledgment of receipt ("we received your application", "our team is reviewing it") where THEY said they will get back to the person, not the other way around
+- a one-time passcode, verification code, or other automated security email - these are not a person waiting for a reply, and are almost always already expired
+- a purely informational update with no request or open question attached
+
+Only select a candidate that clearly asked the person a question, requested a document or a decision, proposed times to confirm, or otherwise needs the person to act - and that a reasonable person would actually want to be reminded about.
+
 You will be given a numbered list of candidates. Respond with strict JSON only, no other text, no markdown fences:
 {"selected": [{"index": <candidate number>, "title": "<short title, under 10 words>", "body": "<one direct sentence explaining why this needs attention now>"}]}
 
