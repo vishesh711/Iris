@@ -1,4 +1,4 @@
-import { getEvent, markEventProcessed, recordEvent } from "../../lib/events.js";
+import { addEventMetadata, getEvent, markEventProcessed, recordEvent } from "../../lib/events.js";
 import { extractMessageText } from "../../lib/extract-text.js";
 import { removeEmbedding } from "../../lib/embed-store.js";
 import { extractMemoryCandidate } from "../../lib/memory-extraction.js";
@@ -81,9 +81,11 @@ export async function runExtractMemoryJob(data: ExtractMemoryJobData): Promise<v
     // The old statement is now superseded and must stop resurfacing
     // anywhere - including via any raw-event embedding a prior,
     // possibly inconsistent classification let through for the event(s)
-    // that originally produced it.
+    // that originally produced it, and via retrieval's short
+    // recent-events window (excludedFromContext, checked there).
     for (const oldEventId of superseded.sourceEventIds as string[]) {
       await removeEmbedding("events", oldEventId);
+      await addEventMetadata(oldEventId, { excludedFromContext: true });
     }
 
     const created = await rememberFact(candidate, {

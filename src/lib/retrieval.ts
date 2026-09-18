@@ -197,7 +197,17 @@ async function structuredCalendarSearch(query: string): Promise<RetrievedItem[]>
 }
 
 async function recentEventsContext(): Promise<RetrievedItem[]> {
-  const rows = await db.select().from(events).orderBy(desc(events.receivedAt)).limit(RECENT_EVENTS_LIMIT);
+  // A forgotten or superseded fact's raw source message must not
+  // resurface here either — removeEmbedding() (memory.ts/extract-memory.ts)
+  // already keeps it out of the semantic search leg, but this leg reads
+  // events directly rather than via embeddings, so it needs its own
+  // exclusion on the same excludedFromContext flag.
+  const rows = await db
+    .select()
+    .from(events)
+    .where(sql`(${events.metadata}->>'excludedFromContext') is distinct from 'true'`)
+    .orderBy(desc(events.receivedAt))
+    .limit(RECENT_EVENTS_LIMIT);
   return rows.map((row) => ({
     kind: "recent_event" as const,
     text: JSON.stringify(row.rawData).slice(0, 300),
