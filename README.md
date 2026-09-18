@@ -24,7 +24,17 @@ Milestone 1: capture is real. The bot process writes every message to the `event
    npm run db:generate
    npm run db:migrate
    ```
-4. For voice transcription, install a whisper.cpp-compatible CLI and a model, then set `WHISPER_BINARY_PATH` / `WHISPER_MODEL_PATH` in `.env`.
+4. For voice transcription, install whisper.cpp and ffmpeg (used to transcode Telegram's OGG/Opus voice notes to WAV before transcribing), then download a model:
+   ```
+   brew install whisper-cpp ffmpeg
+   ls "$(brew --prefix)/bin" | grep whisper   # confirm the binary name — whisper-cli on recent versions
+   curl -L -o ggml-base.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+   ```
+   Then set in `.env`:
+   ```
+   WHISPER_BINARY_PATH=whisper-cli
+   WHISPER_MODEL_PATH=/absolute/path/to/ggml-base.en.bin
+   ```
 5. For classification, run [Ollama](https://ollama.com) locally and pull a model (`ollama pull llama3.2`), then set `OLLAMA_HOST` / `OLLAMA_MODEL` in `.env` if you're not using the defaults.
 6. Run the bot and the worker in separate terminals:
    ```
