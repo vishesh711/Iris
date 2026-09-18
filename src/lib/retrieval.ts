@@ -215,20 +215,13 @@ async function recentEventsContext(): Promise<RetrievedItem[]> {
 export async function retrieve(query: string): Promise<RetrievedItem[]> {
   const queryVector = await embedText(query);
 
-  // Sequential, not Promise.all: running these concurrently produced
-  // rows whose returned `content` didn't match the row a direct lookup
-  // by the same id showed (same row, same rank, different text) -
-  // reproducible from a fresh process every time, and gone once run
-  // sequentially. Suspected drizzle-orm/node-postgres parameter binding
-  // interaction when multiple sql`` template queries are constructed
-  // concurrently on the same pool before any of them await; not worth
-  // chasing further given these are small, infrequent, single-user
-  // queries where the latency difference is immaterial.
-  const memoryHits = await memorySearch(queryVector);
-  const semanticHits = await semanticSearch(queryVector);
-  const emailHits = await structuredEmailSearch(query);
-  const calendarHits = await structuredCalendarSearch(query);
-  const recent = await recentEventsContext();
+  const [memoryHits, semanticHits, emailHits, calendarHits, recent] = await Promise.all([
+    memorySearch(queryVector),
+    semanticSearch(queryVector),
+    structuredEmailSearch(query),
+    structuredCalendarSearch(query),
+    recentEventsContext(),
+  ]);
 
   return [...memoryHits, ...semanticHits, ...emailHits, ...calendarHits, ...recent];
 }

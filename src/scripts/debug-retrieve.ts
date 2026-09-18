@@ -6,9 +6,9 @@ import { retrieve } from "../lib/retrieval.js";
  * Ad-hoc debug tool: prints the raw retrieval legs for a query, so you can
  * see exactly what context the Ask flow's model call actually receives.
  * Not wired into any npm script — run directly with tsx when diagnosing a
- * retrieval-quality issue. Writes the full, untruncated, unmodified items
- * to a JSON file (in addition to a console preview) to rule out any
- * console.log/terminal-rendering artifact in the preview itself.
+ * retrieval-quality issue. Also writes the full, untruncated items to a
+ * JSON file, since the console preview is a truncated, whitespace-
+ * collapsed rendering for skimming, not the literal text the model sees.
  */
 const query = process.argv[2] ?? "Who was the recruiter that contacted me about the contract role, and what did I decide about the rate?";
 
@@ -22,7 +22,7 @@ async function main() {
   console.log(`${items.length} items retrieved:\n`);
   for (const item of items) {
     console.log(`[${item.kind}] score=${item.score.toFixed(3)}`);
-    console.log(item.text.slice(0, 300).replace(/\n/g, " ⏎ "));
+    console.log(item.text.replace(/\s+/g, " ").trim().slice(0, 300));
     console.log(JSON.stringify(item.metadata));
     console.log("---");
   }
