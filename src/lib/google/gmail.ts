@@ -45,31 +45,46 @@ function getPartHeader(part: gmail_v1.Schema$MessagePart, name: string): string 
  * Gmail API's body.data is only base64url-transport-encoded — if the
  * original MIME part itself used Content-Transfer-Encoding:
  * quoted-printable (common for HTML-authored emails' plain-text
- * alternative), the decoded text still contains soft line breaks
- * ("=\r\n") and "=XX" hex-escaped bytes that need a second decode pass,
- * or downstream text (chunking, embeddings) ends up corrupted.
+ * alternative), the underlying bytes still contain soft line breaks
+ * ("=\r\n") and "=XX" hex-escaped bytes that need a second decode pass.
+ * Operates on the raw byte buffer, not a pre-decoded UTF-8 string:
+ * some real-world senders emit literal multi-byte UTF-8 characters
+ * (e.g. an em dash) without escaping them even though the part claims
+ * quoted-printable — decoding to a string first and then reading
+ * charCodeAt() per character would truncate those to a single byte and
+ * corrupt them into replacement characters.
  */
-function decodeQuotedPrintable(text: string): string {
-  const withoutSoftBreaks = text.replace(/=\r\n/g, "").replace(/=\n/g, "");
+function decodeQuotedPrintable(buffer: Buffer): Buffer {
   const bytes: number[] = [];
-  for (let i = 0; i < withoutSoftBreaks.length; i++) {
-    const hex = withoutSoftBreaks.slice(i + 1, i + 3);
-    if (withoutSoftBreaks[i] === "=" && /^[0-9A-Fa-f]{2}$/.test(hex)) {
-      bytes.push(parseInt(hex, 16));
-      i += 2;
-    } else {
-      bytes.push(withoutSoftBreaks.charCodeAt(i));
+  for (let i = 0; i < buffer.length; i++) {
+    if (buffer[i] === 0x3d /* "=" */) {
+      if (buffer[i + 1] === 0x0d && buffer[i + 2] === 0x0a) {
+        i += 2; // soft line break "=\r\n" — join with next line
+        continue;
+      }
+      if (buffer[i + 1] === 0x0a) {
+        i += 1; // soft line break "=\n"
+        continue;
+      }
+      const hex = String.fromCharCode(buffer[i + 1] ?? 0, buffer[i + 2] ?? 0);
+      if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
+        bytes.push(parseInt(hex, 16));
+        i += 2;
+        continue;
+      }
     }
+    bytes.push(buffer[i]);
   }
-  return Buffer.from(bytes).toString("utf8");
+  return Buffer.from(bytes);
 }
 
 function extractPlainText(part: gmail_v1.Schema$MessagePart | undefined): string | null {
   if (!part) return null;
   if (part.mimeType === "text/plain" && part.body?.data) {
-    const decoded = Buffer.from(part.body.data, "base64url").toString("utf8");
+    const raw = Buffer.from(part.body.data, "base64url");
     const encoding = getPartHeader(part, "Content-Transfer-Encoding");
-    return encoding?.toLowerCase() === "quoted-printable" ? decodeQuotedPrintable(decoded) : decoded;
+    const decoded = encoding?.toLowerCase() === "quoted-printable" ? decodeQuotedPrintable(raw) : raw;
+    return decoded.toString("utf8");
   }
   for (const child of part.parts ?? []) {
     const text = extractPlainText(child);

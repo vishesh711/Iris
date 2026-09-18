@@ -109,4 +109,27 @@ describe("parseMessage", () => {
     const parsed = parseMessage(message);
     expect(parsed.bodyText).toBe("LinkedIn sells to recruiters — talented people");
   });
+
+  it("decodes quoted-printable text that also contains a literal unescaped multi-byte UTF-8 character", () => {
+    // Some real senders mark a part quoted-printable but still emit a
+    // raw multi-byte UTF-8 character (e.g. a bullet) instead of
+    // escaping it — building the buffer directly (rather than via a
+    // pre-decoded string) is what makes this not corrupt into U+FFFD.
+    const buffer = Buffer.concat([
+      Buffer.from("Hi there\r\n", "utf8"),
+      Buffer.from("•", "utf8"), // literal bullet, not "=E2=80=A2"
+      Buffer.from("\r\nMatt here=\r\n, co-founder", "utf8"),
+    ]);
+    const message: gmail_v1.Schema$Message = {
+      id: "msg7",
+      payload: {
+        mimeType: "text/plain",
+        headers: [{ name: "Content-Transfer-Encoding", value: "quoted-printable" }],
+        body: { data: buffer.toString("base64url") },
+      },
+    };
+
+    const parsed = parseMessage(message);
+    expect(parsed.bodyText).toBe("Hi there\r\n•\r\nMatt here, co-founder");
+  });
 });
