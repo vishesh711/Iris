@@ -38,7 +38,7 @@ Optional: to route capture/approval/brief traffic into a Telegram supergroup's t
 
 ### Troubleshooting
 
-`role "iris" does not exist` when running `db:migrate`, even after recreating the Docker volume: something else on your machine (Postgres.app, a Homebrew `postgresql` service) is already bound to port 5432 and is intercepting the connection before it reaches Docker. Check with `lsof -i :5432`. Iris's own Postgres runs on host port **5433** (see `docker-compose.yml`) specifically to avoid this; make sure `DATABASE_URL` in your `.env` matches (`.env.example` already does).
+`role "iris" does not exist` when running `db:migrate`, even after recreating the Docker volume: something else on your machine (Postgres.app, a Homebrew `postgresql` service) is already bound to the port Docker is trying to use and is intercepting the connection first. Check with `lsof -i :<port>`. Iris's own Postgres runs on host port **55432** (see `docker-compose.yml`) specifically to avoid the common 5432/5433 collisions; make sure `DATABASE_URL` in your `.env` matches (`.env.example` already does). If `docker compose up -d` itself fails with "address already in use" even right after a fresh `down -v`, that's usually Docker Desktop's own port-forwarding not having released yet — fully quit and reopen Docker Desktop (not just `docker compose down`) before retrying.
 
 ## Layout
 
