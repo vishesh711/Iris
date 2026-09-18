@@ -23,6 +23,12 @@ message (their own preferences, identity, job, plans), use exactly
 someone or something else (e.g. "user's manager", "Acme Corp"). Use
 null only if there is truly no identifiable subject.
 
+A message that corrects or updates something previously said is still a
+fact worth storing — extract the NEW value as the statement, exactly as
+you would for a first-time statement. Never respond null just because
+the message sounds like a correction ("actually...", "...now", "not
+... anymore").
+
 If there is nothing worth storing long-term, respond with exactly:
 null
 
@@ -36,7 +42,9 @@ decayClass guide:
 Examples:
 "My favorite coffee order is a flat white." -> {"statement": "Favorite coffee order is a flat white.", "subject": "user", "predicate": "prefers", "object": "flat white", "decayClass": "preference"}
 "I live in Philadelphia now." -> {"statement": "Lives in Philadelphia.", "subject": "user", "predicate": "lives in", "object": "Philadelphia", "decayClass": "identity"}
-"My manager's name is Priya." -> {"statement": "Manager's name is Priya.", "subject": "user's manager", "predicate": "name", "object": "Priya", "decayClass": "employment"}`;
+"My manager's name is Priya." -> {"statement": "Manager's name is Priya.", "subject": "user's manager", "predicate": "name", "object": "Priya", "decayClass": "employment"}
+"Actually, I moved to Boston, not Philadelphia." -> {"statement": "Lives in Boston.", "subject": "user", "predicate": "lives in", "object": "Boston", "decayClass": "identity"}
+"Actually my favorite coffee order is a cortado now." -> {"statement": "Favorite coffee order is a cortado.", "subject": "user", "predicate": "prefers", "object": "cortado", "decayClass": "preference"}`;
 
 function isDecayClass(value: unknown): value is DecayClass {
   return typeof value === "string" && (DECAY_CLASSES as readonly string[]).includes(value);
