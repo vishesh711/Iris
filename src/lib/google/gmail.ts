@@ -36,10 +36,40 @@ function parseFrom(fromHeader: string | null): { address: string | null; name: s
   return { address: fromHeader.trim(), name: null };
 }
 
+function getPartHeader(part: gmail_v1.Schema$MessagePart, name: string): string | null {
+  const header = part.headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase());
+  return header?.value ?? null;
+}
+
+/**
+ * Gmail API's body.data is only base64url-transport-encoded — if the
+ * original MIME part itself used Content-Transfer-Encoding:
+ * quoted-printable (common for HTML-authored emails' plain-text
+ * alternative), the decoded text still contains soft line breaks
+ * ("=\r\n") and "=XX" hex-escaped bytes that need a second decode pass,
+ * or downstream text (chunking, embeddings) ends up corrupted.
+ */
+function decodeQuotedPrintable(text: string): string {
+  const withoutSoftBreaks = text.replace(/=\r\n/g, "").replace(/=\n/g, "");
+  const bytes: number[] = [];
+  for (let i = 0; i < withoutSoftBreaks.length; i++) {
+    const hex = withoutSoftBreaks.slice(i + 1, i + 3);
+    if (withoutSoftBreaks[i] === "=" && /^[0-9A-Fa-f]{2}$/.test(hex)) {
+      bytes.push(parseInt(hex, 16));
+      i += 2;
+    } else {
+      bytes.push(withoutSoftBreaks.charCodeAt(i));
+    }
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
 function extractPlainText(part: gmail_v1.Schema$MessagePart | undefined): string | null {
   if (!part) return null;
   if (part.mimeType === "text/plain" && part.body?.data) {
-    return Buffer.from(part.body.data, "base64url").toString("utf8");
+    const decoded = Buffer.from(part.body.data, "base64url").toString("utf8");
+    const encoding = getPartHeader(part, "Content-Transfer-Encoding");
+    return encoding?.toLowerCase() === "quoted-printable" ? decodeQuotedPrintable(decoded) : decoded;
   }
   for (const child of part.parts ?? []) {
     const text = extractPlainText(child);

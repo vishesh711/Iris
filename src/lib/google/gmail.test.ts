@@ -89,4 +89,24 @@ describe("parseMessage", () => {
     expect(parsed.toAddresses).toEqual([]);
     expect(parsed.receivedAt).toBeNull();
   });
+
+  it("decodes a quoted-printable text/plain body instead of leaving soft breaks and hex escapes", () => {
+    // "LinkedIn sells to recruiters — talented people" with a
+    // soft line break mid-word and an em dash encoded as =E2=80=94,
+    // exactly as Gmail sends a quoted-printable plain-text part.
+    const quotedPrintable = "LinkedIn se=\r\nlls to recruiters =E2=80=94 talented people";
+    const message: gmail_v1.Schema$Message = {
+      id: "msg6",
+      payload: {
+        mimeType: "text/plain",
+        headers: [
+          { name: "Content-Transfer-Encoding", value: "quoted-printable" },
+        ],
+        body: { data: Buffer.from(quotedPrintable, "utf8").toString("base64url") },
+      },
+    };
+
+    const parsed = parseMessage(message);
+    expect(parsed.bodyText).toBe("LinkedIn sells to recruiters — talented people");
+  });
 });

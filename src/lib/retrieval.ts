@@ -20,6 +20,34 @@ function vectorParam(vector: number[]) {
   return sql`${`[${vector.join(",")}]`}::vector`;
 }
 
+// Common words that would otherwise turn every question into an ILIKE
+// scan for near-meaningless terms. Not exhaustive — just enough to keep
+// the structured legs useful for real questions instead of matching on
+// "what", "the", "did", etc.
+const STOPWORDS = new Set([
+  "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "to", "of", "in", "on", "at", "for",
+  "and", "or", "but", "who", "what", "when", "where", "why", "how", "that", "this", "these", "those", "did",
+  "do", "does", "i", "me", "my", "you", "your", "about", "with", "from", "it", "its", "as", "by", "if", "so",
+  "than", "then", "there", "their", "them", "he", "she", "his", "her", "we", "us", "our", "not", "no", "yes",
+  "have", "has", "had", "will", "would", "can", "could", "should", "which",
+]);
+
+/**
+ * ILIKE against the raw question would only ever match an email/event
+ * containing that exact sentence, so structured search extracts
+ * meaningful keywords first and matches on any of them instead.
+ */
+export function extractKeywords(query: string): string[] {
+  return Array.from(
+    new Set(
+      query
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((word) => word.length > 2 && !STOPWORDS.has(word))
+    )
+  );
+}
+
 async function semanticSearch(queryVector: number[]): Promise<RetrievedItem[]> {
   const distance = sql<number>`${embeddings.vector} <=> ${vectorParam(queryVector)}`;
 
@@ -94,11 +122,18 @@ async function memorySearch(queryVector: number[]): Promise<RetrievedItem[]> {
 }
 
 async function structuredEmailSearch(query: string): Promise<RetrievedItem[]> {
-  const pattern = `%${query}%`;
+  const keywords = extractKeywords(query);
+  if (keywords.length === 0) return [];
+
+  const conditions = keywords.flatMap((word) => {
+    const pattern = `%${word}%`;
+    return [ilike(emails.subject, pattern), ilike(emails.bodyText, pattern), ilike(emails.fromAddress, pattern)];
+  });
+
   const rows = await db
     .select()
     .from(emails)
-    .where(or(ilike(emails.subject, pattern), ilike(emails.bodyText, pattern), ilike(emails.fromAddress, pattern)))
+    .where(or(...conditions))
     .orderBy(desc(emails.receivedAt))
     .limit(STRUCTURED_LIMIT);
 
@@ -111,11 +146,18 @@ async function structuredEmailSearch(query: string): Promise<RetrievedItem[]> {
 }
 
 async function structuredCalendarSearch(query: string): Promise<RetrievedItem[]> {
-  const pattern = `%${query}%`;
+  const keywords = extractKeywords(query);
+  if (keywords.length === 0) return [];
+
+  const conditions = keywords.flatMap((word) => {
+    const pattern = `%${word}%`;
+    return [ilike(calendarEvents.title, pattern), ilike(calendarEvents.description, pattern)];
+  });
+
   const rows = await db
     .select()
     .from(calendarEvents)
-    .where(or(ilike(calendarEvents.title, pattern), ilike(calendarEvents.description, pattern)))
+    .where(or(...conditions))
     .orderBy(desc(calendarEvents.startAt))
     .limit(STRUCTURED_LIMIT);
 
