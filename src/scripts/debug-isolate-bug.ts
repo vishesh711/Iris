@@ -21,9 +21,23 @@ function vectorParam(vector: number[]) {
 const query = process.argv[2] ?? "Who was the recruiter that contacted me about the contract role, and what did I decide about the rate?";
 
 async function runMemoryQuery(queryVector: number[]) {
+  // Matching retrieval.ts's memorySearch column-for-column - a narrower
+  // select here (id/statement/distance only) did NOT reproduce the bug,
+  // so testing whether the full column list (including the nullable
+  // timestamptz columns) is what triggers it.
   const distance = sql<number>`${memories.embedding} <=> ${vectorParam(queryVector)}`;
   return db
-    .select({ id: memories.id, statement: memories.statement, distance })
+    .select({
+      id: memories.id,
+      statement: memories.statement,
+      subject: memories.subject,
+      decayClass: memories.decayClass,
+      lastConfirmedAt: memories.lastConfirmedAt,
+      reinforcementCount: memories.reinforcementCount,
+      validUntil: memories.validUntil,
+      createdAt: memories.createdAt,
+      distance,
+    })
     .from(memories)
     .where(and(eq(memories.status, "active"), isNotNull(memories.embedding)))
     .orderBy(distance)
