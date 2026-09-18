@@ -5,10 +5,17 @@ export type OAuthClient = InstanceType<typeof google.auth.OAuth2>;
 
 const TOKEN_ACCOUNT = "google-oauth-refresh-token";
 
-// Read-only until Milestone 7, per the PRD's own reliability section.
+// Read-only through Milestone 6; Milestone 7 adds narrowly-scoped write
+// access — gmail.compose (create/send/delete drafts only, not full
+// mailbox modify) and calendar.events (manage events, not calendar
+// settings) — rather than the broader gmail.modify/calendar scopes.
+// Re-run `npm run google:auth-setup` after this change to re-consent;
+// an existing refresh token predates these scopes and won't carry them.
 export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.compose",
   "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar.events",
 ];
 
 export function createOAuthClient(): OAuthClient {

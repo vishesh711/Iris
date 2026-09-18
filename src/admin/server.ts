@@ -3,6 +3,7 @@ import { desc } from "drizzle-orm";
 import express from "express";
 import { db } from "../db/client.js";
 import { actions, calendarEvents, emails, events, memories, ruleRuns, rules, syncState } from "../db/schema.js";
+import { undoAction } from "../lib/actions.js";
 import { answerQuestion } from "../lib/ask.js";
 import { decayWeight, type DecayClass } from "../lib/decay.js";
 import { dismissNudge, listActiveNudges } from "../lib/nudges.js";
@@ -258,8 +259,14 @@ app.get("/actions", async (_req, res, next) => {
     const body = `<table>
 <tr><th>Proposed</th><th>Tool</th><th>Tier</th><th>Status</th><th>Untrusted</th><th>Rationale</th><th>Args</th><th>Result</th><th>Undo</th></tr>
 ${rows
-  .map(
-    (row) => `<tr>
+  .map((row) => {
+    const canUndo = row.status === "done" && row.undoPayload && !row.undoneAt;
+    const undoCell = row.undoneAt
+      ? `<span class="muted">undone ${escapeHtml(row.undoneAt.toISOString())}</span>`
+      : canUndo
+        ? `<form method="post" action="/actions/${row.id}/undo"><button type="submit">Undo</button></form>`
+        : '<span class="muted">not available</span>';
+    return `<tr>
 <td>${escapeHtml(row.proposedAt.toISOString())}</td>
 <td>${escapeHtml(row.tool)}</td>
 <td>${row.tier}</td>
@@ -268,12 +275,21 @@ ${rows
 <td>${row.rationale ? escapeHtml(row.rationale) : '<span class="muted">—</span>'}</td>
 <td>${renderJson(row.args)}</td>
 <td>${renderJson(row.result)}</td>
-<td>${row.undoPayload ? renderJson(row.undoPayload) : '<span class="muted">not available</span>'}</td>
-</tr>`
-  )
+<td>${undoCell}</td>
+</tr>`;
+  })
   .join("\n")}
 </table>`;
     res.send(layout(`Tool call audit (${rows.length})`, body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/actions/:id/undo", async (req, res, next) => {
+  try {
+    await undoAction(req.params.id);
+    res.redirect("/actions");
   } catch (err) {
     next(err);
   }

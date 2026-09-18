@@ -76,6 +76,7 @@ export const actions = pgTable(
     untrusted: boolean("untrusted").notNull().default(false),
     idempotencyKey: text("idempotency_key").notNull().unique(),
     undoPayload: jsonb("undo_payload"),
+    undoneAt: timestamp("undone_at", { withTimezone: true }),
     result: jsonb("result"),
     proposedAt: timestamp("proposed_at", { withTimezone: true }).notNull().defaultNow(),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
@@ -207,6 +208,18 @@ export const nudges = pgTable(
       .where(sql`${table.dismissed} = false`),
   })
 );
+
+// Per-tool autonomy overrides (Milestone 7's ladder): consulted by the
+// policy gate ahead of a tool's static tier. A tool only ever gets a row
+// here after the person explicitly said yes to "make it automatic?" —
+// never self-promoted — though demotion back to the static tier (a
+// rejection burst) removes the row without asking, since erring toward
+// more oversight never needs permission.
+export const toolAutonomyOverrides = pgTable("tool_autonomy_overrides", {
+  tool: text("tool").primaryKey(),
+  level: smallint("level").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 // Polymorphic vector store for content types that don't have a dedicated
 // embedding column — messages/transcripts (events) and emails today,

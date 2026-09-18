@@ -10,6 +10,7 @@ import type { ClassifyJobData } from "../worker/jobs/classify.js";
 import type { AskJobData } from "../worker/jobs/ask.js";
 import { registerForgetCommand } from "./commands/forget.js";
 import { registerApprovalHandlers } from "./commands/approvals.js";
+import { registerAutonomyCommand } from "./commands/autonomy.js";
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
@@ -24,6 +25,7 @@ const bot = new Telegraf(token);
 // an ordinary capture-and-classify message below.
 registerForgetCommand(bot);
 registerApprovalHandlers(bot);
+registerAutonomyCommand(bot);
 
 bot.on("message", async (ctx) => {
   const message = ctx.message as Message;

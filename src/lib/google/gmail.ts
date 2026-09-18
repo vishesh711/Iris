@@ -170,3 +170,93 @@ export async function getMessage(auth: OAuthClient, id: string): Promise<ParsedE
   const { data } = await gmail.users.messages.get({ userId: "me", id, format: "full" }, REQUEST_OPTIONS);
   return parseMessage(data);
 }
+
+export interface DraftResult {
+  draftId: string;
+  messageId: string;
+  threadId: string;
+  recipient: string | null;
+}
+
+function buildReplyMime(params: { to: string; subject: string; body: string; inReplyTo?: string }): string {
+  const headers = [`To: ${params.to}`, `Subject: ${params.subject}`, `Content-Type: text/plain; charset="UTF-8"`, `MIME-Version: 1.0`];
+  if (params.inReplyTo) {
+    headers.push(`In-Reply-To: ${params.inReplyTo}`, `References: ${params.inReplyTo}`);
+  }
+  const mime = `${headers.join("\r\n")}\r\n\r\n${params.body}`;
+  return Buffer.from(mime, "utf8").toString("base64url");
+}
+
+/**
+ * Deliberately scoped to replying within an existing thread, not
+ * composing to an arbitrary new address — the recipient is always
+ * someone who already emailed the person, which is what makes the
+ * contacts allowlist a meaningful check later at send time.
+ */
+export async function createDraftReply(auth: OAuthClient, threadId: string, body: string): Promise<DraftResult> {
+  const gmail = getClient(auth);
+  const { data: thread } = await gmail.users.threads.get(
+    { userId: "me", id: threadId, format: "metadata", metadataHeaders: ["From", "Subject", "Message-ID"] },
+    REQUEST_OPTIONS
+  );
+
+  const messages = thread.messages ?? [];
+  const lastMessage = messages[messages.length - 1];
+  if (!lastMessage) {
+    throw new Error(`Thread ${threadId} has no messages to reply to`);
+  }
+
+  const fromHeader = lastMessage.payload?.headers?.find((h) => h.name?.toLowerCase() === "from")?.value ?? null;
+  const { address: replyTo } = parseFrom(fromHeader);
+  if (!replyTo) {
+    throw new Error(`Could not determine a reply-to address for thread ${threadId}`);
+  }
+
+  const subjectHeader = lastMessage.payload?.headers?.find((h) => h.name?.toLowerCase() === "subject")?.value ?? "";
+  const subject = subjectHeader.toLowerCase().startsWith("re:") ? subjectHeader : `Re: ${subjectHeader}`;
+  const messageIdHeader = lastMessage.payload?.headers?.find((h) => h.name?.toLowerCase() === "message-id")?.value ?? undefined;
+
+  const raw = buildReplyMime({ to: replyTo, subject, body, inReplyTo: messageIdHeader });
+
+  const { data } = await gmail.users.drafts.create({ userId: "me", requestBody: { message: { raw, threadId } } }, REQUEST_OPTIONS);
+  if (!data.id || !data.message?.id) {
+    throw new Error("Gmail did not return a draft id");
+  }
+
+  return { draftId: data.id, messageId: data.message.id, threadId: data.message.threadId ?? threadId, recipient: replyTo };
+}
+
+function isNotFoundError(err: unknown): boolean {
+  return typeof err === "object" && err !== null && "code" in err && (err as { code?: number }).code === 404;
+}
+
+/** Returns null (not a throw) when the draft doesn't exist — used both for a normal not-found and for detecting an already-sent draft during crash reconciliation. */
+export async function getDraft(auth: OAuthClient, draftId: string): Promise<gmail_v1.Schema$Draft | null> {
+  const gmail = getClient(auth);
+  try {
+    const { data } = await gmail.users.drafts.get({ userId: "me", id: draftId, format: "metadata" }, REQUEST_OPTIONS);
+    return data;
+  } catch (err) {
+    if (isNotFoundError(err)) return null;
+    throw err;
+  }
+}
+
+export function getDraftRecipient(draft: gmail_v1.Schema$Draft): string | null {
+  const toHeader = draft.message?.payload?.headers?.find((h) => h.name?.toLowerCase() === "to")?.value ?? null;
+  return parseFrom(toHeader).address;
+}
+
+export async function sendDraft(auth: OAuthClient, draftId: string): Promise<{ messageId: string }> {
+  const gmail = getClient(auth);
+  const { data } = await gmail.users.drafts.send({ userId: "me", requestBody: { id: draftId } }, REQUEST_OPTIONS);
+  if (!data.id) {
+    throw new Error("Gmail did not return a message id after sending");
+  }
+  return { messageId: data.id };
+}
+
+export async function deleteDraft(auth: OAuthClient, draftId: string): Promise<void> {
+  const gmail = getClient(auth);
+  await gmail.users.drafts.delete({ userId: "me", id: draftId }, REQUEST_OPTIONS);
+}

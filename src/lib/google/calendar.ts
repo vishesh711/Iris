@@ -111,3 +111,36 @@ export async function listEventsSince(
 
   return { events, syncToken: newSyncToken };
 }
+
+export interface CreateEventParams {
+  calendarId?: string;
+  title: string;
+  description?: string;
+  location?: string;
+  startAt: Date;
+  endAt: Date;
+}
+
+export async function createEvent(auth: OAuthClient, params: CreateEventParams): Promise<ParsedCalendarEvent> {
+  const calendar = getClient(auth);
+  const calendarId = params.calendarId ?? "primary";
+  const { data } = await calendar.events.insert(
+    {
+      calendarId,
+      requestBody: {
+        summary: params.title,
+        description: params.description,
+        location: params.location,
+        start: { dateTime: params.startAt.toISOString() },
+        end: { dateTime: params.endAt.toISOString() },
+      },
+    },
+    REQUEST_OPTIONS
+  );
+  return parseEvent(data, calendarId);
+}
+
+export async function deleteEvent(auth: OAuthClient, calendarId: string, providerId: string): Promise<void> {
+  const calendar = getClient(auth);
+  await calendar.events.delete({ calendarId, eventId: providerId }, REQUEST_OPTIONS);
+}

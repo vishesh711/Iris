@@ -6,6 +6,8 @@ import { getToolDefinition } from "./tools/registry.js";
 import { evaluateAction, isFailureCircuitTripped, type PolicyDecision } from "./tools/policy-gate.js";
 import { deriveIdempotencyKey } from "./idempotency.js";
 import { isLineageUntrusted } from "./untrusted-lineage.js";
+import { finalizeUndoPayload, performUndo } from "./undo.js";
+import { checkAutonomyDemotion, checkAutonomyPromotion, getAutonomyOverrideTier } from "./autonomy.js";
 
 export type ActionRow = typeof actions.$inferSelect;
 
@@ -35,7 +37,8 @@ export async function proposeAction(params: {
   const lineageUntrusted = params.sourceEventId ? await isLineageUntrusted(params.sourceEventId) : false;
   const untrusted = (params.untrusted ?? false) || lineageUntrusted;
 
-  let decision = evaluateAction({ tool: params.tool, untrusted });
+  const tierOverride = (await getAutonomyOverrideTier(params.tool)) ?? undefined;
+  let decision = evaluateAction({ tool: params.tool, untrusted, tierOverride });
   if (decision === "approved" && (await isFailureCircuitTripped())) {
     decision = "queued";
   }
@@ -84,9 +87,10 @@ export async function executeAction(action: ActionRow): Promise<ActionRow> {
       throw new Error(`No handler registered for tool: ${action.tool}`);
     }
     const result = await definition.handler(action.args as Record<string, unknown>);
+    const undoPayload = finalizeUndoPayload(action.tool, result);
     const [updated] = await db
       .update(actions)
-      .set({ status: "done", result: result ?? null, executedAt: new Date() })
+      .set({ status: "done", result: result ?? null, undoPayload, executedAt: new Date() })
       .where(eq(actions.id, action.id))
       .returning();
     return updated;
@@ -120,6 +124,27 @@ export async function approveAction(actionId: string): Promise<ActionRow> {
     .where(eq(actions.id, actionId))
     .returning();
 
+  await checkAutonomyPromotion(action.tool);
+
+  return updated;
+}
+
+export async function undoAction(actionId: string): Promise<ActionRow> {
+  const [action] = await db.select().from(actions).where(eq(actions.id, actionId));
+  if (!action) {
+    throw new Error(`Action not found: ${actionId}`);
+  }
+  if (action.status !== "done") {
+    throw new Error(`Cannot undo an action that isn't done (status: ${action.status}).`);
+  }
+  if (action.undoneAt) {
+    return action;
+  }
+
+  await performUndo(action);
+
+  const [updated] = await db.update(actions).set({ undoneAt: new Date() }).where(eq(actions.id, actionId)).returning();
+
   return updated;
 }
 
@@ -137,6 +162,8 @@ export async function rejectAction(actionId: string): Promise<ActionRow> {
     .set({ status: "rejected", decidedAt: new Date() })
     .where(eq(actions.id, actionId))
     .returning();
+
+  await checkAutonomyDemotion(action.tool);
 
   return updated;
 }

@@ -18,8 +18,23 @@ describe("policy gate", () => {
   });
 
   it("fails closed — denies rather than approving — when the tool is not in the registry", () => {
-    expect(evaluateAction({ tool: "gmail.send_draft" })).toBe("denied");
     expect(evaluateAction({ tool: "totally.unregistered.tool" })).toBe("denied");
+  });
+
+  it("does not auto-approve gmail.send_draft: irreversible, requires a tap", () => {
+    expect(evaluateAction({ tool: "gmail.send_draft" })).toBe("queued");
+  });
+
+  it("does not auto-approve calendar.create_event: requires a tap", () => {
+    expect(evaluateAction({ tool: "calendar.create_event" })).toBe("queued");
+  });
+
+  it("auto-approves gmail.create_draft: reversible and invisible until sent", () => {
+    expect(evaluateAction({ tool: "gmail.create_draft" })).toBe("approved");
+  });
+
+  it("forces the queue for gmail.create_draft carrying untrusted lineage, despite being tier 1", () => {
+    expect(evaluateAction({ tool: "gmail.create_draft", untrusted: true })).toBe("queued");
   });
 
   it("forces the queue for a tier-0 tool carrying untrusted lineage", () => {

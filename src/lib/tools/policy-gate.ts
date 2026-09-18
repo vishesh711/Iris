@@ -15,7 +15,13 @@ export type PolicyDecision = "approved" | "queued" | "denied";
  * default. This is the one place where the model must not be able to
  * reason its way to "this one is safe."
  */
-export function evaluateAction(params: { tool: string; untrusted?: boolean }): PolicyDecision {
+/**
+ * tierOverride (Milestone 7's autonomy ladder) substitutes for the
+ * registry's static tier when the person has explicitly promoted a tool
+ * to auto-approve — it never widens what untrusted lineage or the kill
+ * switch already force, both of which are still checked first.
+ */
+export function evaluateAction(params: { tool: string; untrusted?: boolean; tierOverride?: number }): PolicyDecision {
   try {
     if (process.env.IRIS_KILL_SWITCH === "true") {
       return "queued";
@@ -30,15 +36,17 @@ export function evaluateAction(params: { tool: string; untrusted?: boolean }): P
       return "queued";
     }
 
-    if (definition.tier === 2) {
+    const tier = params.tierOverride ?? definition.tier;
+
+    if (tier === 2) {
       return "queued";
     }
 
-    if (definition.tier === 0 || definition.tier === 1) {
+    if (tier === 0 || tier === 1) {
       return "approved";
     }
 
-    throw new Error(`Unrecognized tier for tool ${params.tool}: ${definition.tier}`);
+    throw new Error(`Unrecognized tier for tool ${params.tool}: ${tier}`);
   } catch {
     return "denied";
   }
