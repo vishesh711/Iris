@@ -13,7 +13,15 @@ const SYSTEM_PROMPT = `You extract one durable personal fact worth remembering l
 Respond with strict JSON only, no other text, no markdown fences.
 
 If there is a fact worth storing, respond with:
-{"statement": "<a clear standalone sentence>", "subject": "<the person/thing this is about, or null>", "predicate": "<short relation, or null>", "object": "<short value, or null>", "decayClass": "identity" | "employment" | "preference" | "intent" | "scheduled"}
+{"statement": "<a clear standalone sentence>", "subject": "<see subject rule below>", "predicate": "<short relation, or null>", "object": "<short value, or null>", "decayClass": "identity" | "employment" | "preference" | "intent" | "scheduled"}
+
+Subject rule: subject identifies who/what the fact is about, and is what
+later facts get compared against to detect contradictions — it should
+almost never be null. If the fact is about the person sending the
+message (their own preferences, identity, job, plans), use exactly
+"user". Only use a different subject when the fact is clearly about
+someone or something else (e.g. "user's manager", "Acme Corp"). Use
+null only if there is truly no identifiable subject.
 
 If there is nothing worth storing long-term, respond with exactly:
 null
@@ -23,7 +31,12 @@ decayClass guide:
 - employment: job, employer, title, professional role
 - preference: likes, dislikes, habits, recurring choices
 - intent: a plan, goal, or thing they intend to do
-- scheduled: tied to a specific date or deadline`;
+- scheduled: tied to a specific date or deadline
+
+Examples:
+"My favorite coffee order is a flat white." -> {"statement": "Favorite coffee order is a flat white.", "subject": "user", "predicate": "prefers", "object": "flat white", "decayClass": "preference"}
+"I live in Philadelphia now." -> {"statement": "Lives in Philadelphia.", "subject": "user", "predicate": "lives in", "object": "Philadelphia", "decayClass": "identity"}
+"My manager's name is Priya." -> {"statement": "Manager's name is Priya.", "subject": "user's manager", "predicate": "name", "object": "Priya", "decayClass": "employment"}`;
 
 function isDecayClass(value: unknown): value is DecayClass {
   return typeof value === "string" && (DECAY_CLASSES as readonly string[]).includes(value);
