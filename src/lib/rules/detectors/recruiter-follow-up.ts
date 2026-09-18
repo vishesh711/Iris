@@ -2,7 +2,9 @@ import { sql } from "drizzle-orm";
 import { db } from "../../../db/client.js";
 import type { RuleCandidate } from "../types.js";
 
-const STALE_AFTER_DAYS = 3;
+// Hours, not days, so the window is configurable finely enough to
+// live-verify against real data without waiting days for it to age in.
+const STALE_AFTER_HOURS = Number(process.env.RECRUITER_FOLLOWUP_STALE_HOURS ?? 72);
 
 interface Row {
   [key: string]: unknown;
@@ -29,7 +31,7 @@ export async function detectRecruiterFollowUp(): Promise<RuleCandidate[]> {
     from emails e
     join entities en on en.id = e.entity_id
     where en.type = 'recruiter'
-      and e.received_at < now() - (${STALE_AFTER_DAYS} * interval '1 day')
+      and e.received_at < now() - (${STALE_AFTER_HOURS} * interval '1 hour')
       and e.subject not ilike '%verification code%'
       and e.subject not ilike '%passcode%'
       and e.subject not ilike '%one-time%'

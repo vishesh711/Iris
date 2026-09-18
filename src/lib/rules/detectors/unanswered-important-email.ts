@@ -2,7 +2,9 @@ import { sql } from "drizzle-orm";
 import { db } from "../../../db/client.js";
 import type { RuleCandidate } from "../types.js";
 
-const STALE_AFTER_DAYS = 2;
+// Hours, not days, so the window is configurable finely enough to
+// live-verify against real data without waiting days for it to age in.
+const STALE_AFTER_HOURS = Number(process.env.UNANSWERED_EMAIL_STALE_HOURS ?? 48);
 
 interface Row {
   [key: string]: unknown;
@@ -35,7 +37,7 @@ export async function detectUnansweredImportantEmail(): Promise<RuleCandidate[]>
       and e.subject not ilike '%passcode%'
       and e.subject not ilike '%one-time%'
       and e.subject not ilike '%confirm your identity%'
-      and e.received_at < now() - (${STALE_AFTER_DAYS} * interval '1 day')
+      and e.received_at < now() - (${STALE_AFTER_HOURS} * interval '1 hour')
       and not exists (
         select 1 from emails e2
         where e2.thread_id = e.thread_id
