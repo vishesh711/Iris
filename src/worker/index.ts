@@ -8,8 +8,12 @@ import { runIngestCalendarJob } from "./jobs/ingest-calendar.js";
 import { runExtractEntityJob, type ExtractEntityJobData } from "./jobs/extract-entities.js";
 import { runEmbedJob, type EmbedJobData } from "./jobs/embed.js";
 import { runAskJob, type AskJobData } from "./jobs/ask.js";
+import { runDetectorsJob } from "./jobs/run-detectors.js";
+import { runMorningBriefJob } from "./jobs/morning-brief.js";
 
 const INGEST_CRON = "*/5 * * * *";
+const DETECTORS_CRON = "0 * * * *"; // hourly
+const MORNING_BRIEF_CRON = "0 8 * * *"; // 8am UTC daily — adjust to your timezone if this drifts from actual morning
 
 async function main() {
   const boss = await getBoss();
@@ -58,8 +62,18 @@ async function main() {
     }
   });
 
+  await boss.work(QUEUES.runDetectors, async () => {
+    await runDetectorsJob();
+  });
+
+  await boss.work(QUEUES.morningBrief, async () => {
+    await runMorningBriefJob();
+  });
+
   await boss.schedule(QUEUES.ingestGmail, INGEST_CRON);
   await boss.schedule(QUEUES.ingestCalendar, INGEST_CRON);
+  await boss.schedule(QUEUES.runDetectors, DETECTORS_CRON);
+  await boss.schedule(QUEUES.morningBrief, MORNING_BRIEF_CRON);
 
   console.log("Iris worker is listening.");
 }

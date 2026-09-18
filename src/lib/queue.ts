@@ -10,6 +10,8 @@ export const QUEUES = {
   extractEntities: "extract-entities",
   embed: "embed",
   ask: "ask",
+  runDetectors: "run-detectors",
+  morningBrief: "morning-brief",
 } as const;
 
 let boss: PgBoss | null = null;

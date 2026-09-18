@@ -2,9 +2,10 @@ import "dotenv/config";
 import { desc } from "drizzle-orm";
 import express from "express";
 import { db } from "../db/client.js";
-import { calendarEvents, emails, events, memories, syncState } from "../db/schema.js";
+import { calendarEvents, emails, events, memories, ruleRuns, rules, syncState } from "../db/schema.js";
 import { answerQuestion } from "../lib/ask.js";
 import { decayWeight, type DecayClass } from "../lib/decay.js";
+import { dismissNudge, listActiveNudges } from "../lib/nudges.js";
 
 const PORT = Number(process.env.ADMIN_PORT ?? 4000);
 
@@ -36,7 +37,7 @@ function layout(title: string, body: string): string {
 </style>
 </head>
 <body>
-<nav><a href="/events">Events</a><a href="/memories">Memories</a><a href="/emails">Emails</a><a href="/health">Health</a><a href="/ask">Ask</a></nav>
+<nav><a href="/events">Events</a><a href="/memories">Memories</a><a href="/emails">Emails</a><a href="/health">Health</a><a href="/ask">Ask</a><a href="/nudges">Nudges</a></nav>
 <h1>${escapeHtml(title)}</h1>
 ${body}
 </body>
@@ -179,6 +180,73 @@ app.get("/ask", async (req, res, next) => {
     const answer = await answerQuestion(question);
     const body = `${form}<h2>Question</h2><p>${escapeHtml(question)}</p><h2>Answer</h2><pre>${escapeHtml(answer)}</pre>`;
     res.send(layout("Ask", body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/nudges", async (_req, res, next) => {
+  try {
+    const [ruleRows, runRows, activeNudges] = await Promise.all([
+      db.select().from(rules),
+      db.select().from(ruleRuns).orderBy(desc(ruleRuns.ranAt)).limit(50),
+      listActiveNudges(),
+    ]);
+    const ruleNameById = new Map(ruleRows.map((rule) => [rule.id, rule.name]));
+
+    const rulesTable = `<table>
+<tr><th>Rule</th><th>Enabled</th><th>Description</th></tr>
+${ruleRows
+  .map(
+    (rule) => `<tr>
+<td>${escapeHtml(rule.name)}</td>
+<td>${rule.enabled ? "yes" : "no"}</td>
+<td>${escapeHtml(rule.description ?? "")}</td>
+</tr>`
+  )
+  .join("\n")}
+</table>`;
+
+    const nudgesTable = `<table>
+<tr><th>Rule</th><th>Title</th><th>Body</th><th>Sent</th><th></th></tr>
+${activeNudges
+  .map(
+    (nudge) => `<tr>
+<td>${escapeHtml(ruleNameById.get(nudge.ruleId) ?? nudge.ruleId)}</td>
+<td>${escapeHtml(nudge.title)}</td>
+<td>${escapeHtml(nudge.body ?? "")}</td>
+<td>${nudge.sentAt ? escapeHtml(nudge.sentAt.toISOString()) : '<span class="muted">—</span>'}</td>
+<td><form method="post" action="/nudges/${nudge.id}/dismiss"><button type="submit">Dismiss</button></form></td>
+</tr>`
+  )
+  .join("\n")}
+</table>`;
+
+    const runsTable = `<table>
+<tr><th>Rule</th><th>Ran at</th><th>Candidates</th><th>Error</th></tr>
+${runRows
+  .map(
+    (run) => `<tr>
+<td>${escapeHtml(ruleNameById.get(run.ruleId) ?? run.ruleId)}</td>
+<td>${escapeHtml(run.ranAt.toISOString())}</td>
+<td>${run.candidateCount}</td>
+<td>${run.error ? escapeHtml(run.error) : '<span class="muted">—</span>'}</td>
+</tr>`
+  )
+  .join("\n")}
+</table>`;
+
+    const body = `<h2>Rules</h2>${rulesTable}<h2>Active nudges (${activeNudges.length})</h2>${nudgesTable}<h2>Recent runs</h2>${runsTable}`;
+    res.send(layout("Nudges", body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/nudges/:id/dismiss", async (req, res, next) => {
+  try {
+    await dismissNudge(req.params.id);
+    res.redirect("/nudges");
   } catch (err) {
     next(err);
   }

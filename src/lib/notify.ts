@@ -26,11 +26,11 @@ export async function sendMessage(chatId: string | number, text: string, threadI
   await client.sendMessage(chatId, text, threadId ? { message_thread_id: threadId } : undefined);
 }
 
-export async function notifyOwner(text: string): Promise<void> {
+export async function notifyOwner(text: string, threadId?: number): Promise<void> {
   const chatId = process.env.TELEGRAM_OWNER_CHAT_ID;
   if (!chatId) {
     console.error("TELEGRAM_OWNER_CHAT_ID is not set; dropping notification:", text);
     return;
   }
-  await sendMessage(chatId, text);
+  await sendMessage(chatId, text, threadId);
 }

@@ -157,6 +157,57 @@ export const syncState = pgTable("sync_state", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Deterministic SQL detectors, run on a schedule — never a model call (a
+// rule's own SQL decides what qualifies as a candidate). See
+// src/lib/rules/detectors/*.
+export const rules = pgTable("rules", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull().unique(),
+  description: text("description"),
+  importanceWeight: integer("importance_weight").notNull().default(1),
+  enabled: boolean("enabled").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// One row per detector run, so the debug UI can show rule-run history and
+// a candidateCount of 0 is distinguishable from a rule that errored.
+export const ruleRuns = pgTable("rule_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  ruleId: uuid("rule_id")
+    .notNull()
+    .references(() => rules.id),
+  ranAt: timestamp("ran_at", { withTimezone: true }).notNull().defaultNow(),
+  candidateCount: integer("candidate_count").notNull().default(0),
+  error: text("error"),
+});
+
+// A surfaced nudge, one per (rule, entity) while undismissed — the unique
+// partial index is what makes "fires every morning for six days" and
+// same-day re-notification structurally impossible, not just
+// discouraged by application logic.
+export const nudges = pgTable(
+  "nudges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ruleId: uuid("rule_id")
+      .notNull()
+      .references(() => rules.id),
+    entityId: uuid("entity_id").references(() => entities.id),
+    title: text("title").notNull(),
+    body: text("body"),
+    metadata: jsonb("metadata"),
+    dismissed: boolean("dismissed").notNull().default(false),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    activeUniqueIdx: uniqueIndex("nudges_rule_entity_active_unique")
+      .on(table.ruleId, table.entityId)
+      .where(sql`${table.dismissed} = false`),
+  })
+);
+
 // Polymorphic vector store for content types that don't have a dedicated
 // embedding column — messages/transcripts (events) and emails today,
 // documents later. memories carries its own embedding column directly
