@@ -2,6 +2,7 @@ import { and, desc, eq, ilike, inArray, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { memories } from "../db/schema.js";
 import { decayWeight, type DecayClass } from "./decay.js";
+import { embedText } from "./embeddings.js";
 import type { MemoryCandidate } from "./memory-extraction.js";
 import { ollamaGenerate } from "./ollama.js";
 
@@ -19,6 +20,7 @@ export async function rememberFact(
   candidate: MemoryCandidate,
   params: { certainty: Certainty; sourceEventId: string; supersedes?: string }
 ): Promise<MemoryRow> {
+  const vector = await embedText(candidate.statement);
   const [row] = await db
     .insert(memories)
     .values({
@@ -30,6 +32,7 @@ export async function rememberFact(
       decayClass: candidate.decayClass,
       sourceEventIds: [params.sourceEventId],
       supersedes: params.supersedes,
+      embedding: vector,
     })
     .returning();
   return row;

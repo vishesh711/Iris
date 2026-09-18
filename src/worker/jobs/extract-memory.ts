@@ -1,4 +1,5 @@
 import { getEvent, markEventProcessed, recordEvent } from "../../lib/events.js";
+import { extractMessageText } from "../../lib/extract-text.js";
 import { extractMemoryCandidate } from "../../lib/memory-extraction.js";
 import {
   bumpReinforcement,
@@ -14,20 +15,11 @@ export interface ExtractMemoryJobData {
   traceId?: string;
 }
 
-function extractText(rawData: unknown): string {
-  if (rawData && typeof rawData === "object") {
-    const data = rawData as Record<string, unknown>;
-    if (typeof data.text === "string") return data.text;
-    if (typeof data.caption === "string") return data.caption;
-  }
-  return "";
-}
-
 export async function runExtractMemoryJob(data: ExtractMemoryJobData): Promise<void> {
   const event = await getEvent(data.eventId);
   if (!event) return;
 
-  const text = extractText(event.rawData);
+  const text = extractMessageText(event.rawData);
   if (!text) {
     await markEventProcessed(event.id, { memoryExtracted: false, reason: "no-text" });
     return;

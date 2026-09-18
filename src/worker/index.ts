@@ -6,6 +6,8 @@ import { runExtractMemoryJob, type ExtractMemoryJobData } from "./jobs/extract-m
 import { runIngestGmailJob } from "./jobs/ingest-gmail.js";
 import { runIngestCalendarJob } from "./jobs/ingest-calendar.js";
 import { runExtractEntityJob, type ExtractEntityJobData } from "./jobs/extract-entities.js";
+import { runEmbedJob, type EmbedJobData } from "./jobs/embed.js";
+import { runAskJob, type AskJobData } from "./jobs/ask.js";
 
 const INGEST_CRON = "*/5 * * * *";
 
@@ -41,6 +43,18 @@ async function main() {
   await boss.work<ExtractEntityJobData>(QUEUES.extractEntities, async (jobs) => {
     for (const job of jobs) {
       await runExtractEntityJob(job.data);
+    }
+  });
+
+  await boss.work<EmbedJobData>(QUEUES.embed, async (jobs) => {
+    for (const job of jobs) {
+      await runEmbedJob(job.data);
+    }
+  });
+
+  await boss.work<AskJobData>(QUEUES.ask, async (jobs) => {
+    for (const job of jobs) {
+      await runAskJob(job.data);
     }
   });
 

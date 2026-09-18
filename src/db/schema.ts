@@ -9,6 +9,7 @@ import {
   integer,
   vector,
   index,
+  uniqueIndex,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
@@ -155,3 +156,29 @@ export const syncState = pgTable("sync_state", {
   lastError: text("last_error"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Polymorphic vector store for content types that don't have a dedicated
+// embedding column — messages/transcripts (events) and emails today,
+// documents later. memories carries its own embedding column directly
+// (see above) and is never duplicated in here. The unique index makes
+// re-embedding idempotent: chunking the same source content again
+// updates in place instead of accumulating duplicate rows.
+export const embeddings = pgTable(
+  "embeddings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sourceTable: text("source_table").notNull(),
+    sourceId: uuid("source_id").notNull(),
+    chunkIndex: integer("chunk_index").notNull().default(0),
+    content: text("content"),
+    vector: vector("vector", { dimensions: 384 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    sourceChunkUnique: uniqueIndex("embeddings_source_chunk_unique").on(
+      table.sourceTable,
+      table.sourceId,
+      table.chunkIndex
+    ),
+  })
+);

@@ -11,7 +11,7 @@ Each milestone below reuses the existing conventions from Milestone 0/1: `record
 
 New dependencies get added incrementally per milestone (pg-boss, Ollama client, a local Whisper binary wrapper, `@xenova/transformers` for embeddings, `keytar` for OS keychain, `vitest` for tests) — never all at once.
 
-**Status:** Milestones 1, 2, and 3 are implemented and live-verified (see below). Milestones 4–7 are planned but not yet built.
+**Status:** Milestones 1, 2, and 3 are implemented and live-verified (see below). Milestone 4 is implemented, pending live verification. Milestones 5–7 are planned but not yet built.
 
 ---
 
@@ -100,22 +100,27 @@ Two real prompt-quality bugs were found and fixed during this live verification 
 
 ---
 
-## Milestone 4 — Unified search
+## Milestone 4 — Unified search ✅ implemented, live-verification pending
 
 **Scope (PRD: embeddings, hybrid retrieval, ranking rule, definition-of-done):** this is where the MVP's cold-start test question first becomes answerable — "who was the recruiter... what did I decide about the rate."
 
-**New files:**
-- `src/lib/embeddings.ts` — local embedding model (bge-small/all-MiniLM via `@xenova/transformers`), zero-cost.
-- `src/worker/jobs/embed.ts` — chunks + embeds new/updated messages and emails into the `embeddings` table.
-- `src/lib/retrieval.ts` — four legs merged: semantic (pgvector `<=>` over `embeddings` + `memories.embedding`), structured SQL over `emails`/`calendar_events`, `memories.ts` search filtered to active/non-superseded, recent `events` for conversational context — plus the PRD's explicit ranking rule: **prefer the newest non-superseded fact over the most semantically similar one.**
-- `src/lib/ask.ts` — Ask flow entry point. Retrieved content goes into a typed data field passed to the model, never concatenated into the instruction string (first real use of the "structural separation" injection defense, established early even though nothing acts on model output yet).
-- `src/eval/` — new directory; start the labeled eval set now (PRD wants 50–100 scenarios "before Milestone 4 ships," meaning work starts during M3).
+**Files:**
+- `src/lib/embeddings.ts` — `embedText()` via `@xenova/transformers` (`Xenova/all-MiniLM-L6-v2`, 384 dims, matching the schema's `vector(384)` columns), fully local, zero API cost; `chunkText()`, pure and unit tested, fixed-size chunking (deliberately simple — sentence-aware chunking is a future refinement, not needed to validate the pipeline).
+- `src/lib/embed-store.ts` — `embedAndStoreChunks()`, shared by both the real-time job and the backfill script. Idempotent on `(source_table, source_id, chunk_index)`; also deletes any leftover tail chunks from a previous, longer embedding of the same source.
+- `src/worker/jobs/embed.ts` — thin job wrapper, enqueued from `classify.ts` (for every captured message/transcript, not just facts — anything should be findable later) and from `ingest-gmail.ts` (per new email).
+- `rememberFact()` in `memory.ts` now embeds the statement at write time, so every future memory is searchable immediately — no separate backfill needed going forward.
+- `src/lib/retrieval.ts` — four legs merged: semantic search over `embeddings` (messages/emails), memory search over `memories.embedding` (status='active' only — see ranking rule below), structured `ILIKE` search over `emails`/`calendar_events` (catches exact terms embeddings can miss), and recent `events` for conversational context.
+- `src/lib/ask.ts` — retrieved content goes into a clearly delimited `CONTEXT:` block with an explicit instruction that it is data, never a command — the first real use of the PRD's "structural separation" injection defense, established now even though nothing acts on model output yet (this matters specifically because Gmail-sourced content, tagged `untrusted` since M3, flows through this exact path).
+- `src/worker/jobs/ask.ts` — enqueued from `bot/index.ts` for any message ending in `?` (a trivial, zero-cost string check — no model call, so it doesn't slow the "got it." ack), replies via `notify.ts`'s `sendMessage()` directly to the originating chat/thread.
+- `src/scripts/backfill-embeddings.ts` — one-off, idempotent backfill for memories/events/emails ingested before this milestone existed. A real, necessary step, not optional: without it, everything from Milestones 1–3 (including the recruiter emails the definition-of-done question depends on) would be invisible to search.
+- `src/eval/definition-of-done.ts` — runs the PRD's own cold-start question through `answerQuestion()` directly. This is eval case #1; the other 49+ the PRD wants can't be fabricated honestly without real data to check them against, so the set grows from here as real usage accumulates.
+- `src/admin/server.ts` — `/ask` page to test the flow without going through Telegram.
 
-**Modify:** `src/bot/index.ts` — route free-form questions to `ask.ts`.
+**The ranking rule, implemented precisely:** "prefer the newest non-superseded fact over the most semantically similar one" is implemented as exclusion, not mere down-ranking — the memory leg's `status='active'` filter means a superseded memory can never surface via search at all, regardless of how semantically similar it is to the query. Within the remaining active set, `similarity * decayWeight` blends recency into the ranking so a long-decayed-but-technically-active memory doesn't outrank a fresher, equally relevant one.
 
-**Data model:** `embeddings(id uuid pk, source_table text not null, source_id uuid not null, chunk_index int not null default 0, content text, vector vector(384) not null, created_at timestamptz default now())`, unique on `(source_table, source_id, chunk_index)`. `memories` keeps using its own `embedding` column directly — don't duplicate memory vectors into this table too.
+**Data model:** `embeddings` table, exact DDL from the original plan (`source_table`, `source_id`, `chunk_index`, `content`, `vector(384)`, unique on the first three). `memories` keeps using its own `embedding` column directly — never duplicated into `embeddings`.
 
-**Verification (load-bearing):** build a real script in `src/eval/` reproducing the definition-of-done question from a cold process with no context in the prompt, using a real recruiter email (M3) plus a Telegram-captured rate decision (M1/M2) — this becomes eval case #1. Also run retrieval-ranking unit tests confirming decay+supersession beats raw cosine similarity.
+**Verified so far:** `npm run typecheck` and `npm test` pass, including a new unit test file for `chunkText()`. The retrieval/embedding/ask pipeline itself needs a live Postgres+pgvector to exercise and hasn't been run against real data yet — do that next, same as every prior milestone: run `npm run backfill:embeddings`, then `npm run eval:dod` to check the definition-of-done question resolves correctly against the user's real recruiter emails (M3) and memories (M1/M2); separately confirm a stated-then-corrected preference's search results only ever surface the current value, never the superseded one.
 
 ---
 
@@ -223,4 +228,4 @@ Each milestone section above has its own concrete test. The two checkpoints that
 
 ## Next step
 
-Milestone 4 — unified search (embeddings, hybrid retrieval, the ranking rule, the definition-of-done question). With real email and memory data now flowing (Milestones 1–3 all live-verified), this is the milestone where the PRD's own cold-start test question — "who was the recruiter... what did I decide about the rate" — first becomes answerable.
+Live-verify Milestone 4: run `npm run backfill:embeddings` then `npm run eval:dod` against real data, and confirm the supersession-excludes-from-search behavior with a real corrected preference. Then Milestone 5 — rules engine and nudges.

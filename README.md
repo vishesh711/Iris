@@ -6,9 +6,9 @@ Full design: [`docs/PRD.md`](docs/PRD.md). Build plan for the remaining mileston
 
 ## Status
 
-Milestone 3 (live-verified): read-only Gmail and Calendar ingest, on top of Milestones 1–2's capture and memory pipeline. A background job polls Gmail's history API and Google Calendar's incremental sync every 5 minutes, upserting into `emails`/`calendar_events` on their provider ids so re-delivery never duplicates. Every Gmail/Calendar-sourced event is tagged `untrusted` in the ledger at ingest time. Senders get classified (currently a cheap keyword heuristic, e.g. `recruiter`) into an `entities` table. An expired Google token surfaces as an immediate Telegram alert instead of silently going quiet. The PRD calls for this to go through MCP clients; this build uses Google's official API client directly instead — see `docs/BUILD_PLAN.md` for why.
+Milestone 4: unified search. Every captured message, transcript, and email now gets chunked and embedded locally (`@xenova/transformers`, no API cost) into a shared `embeddings` table; every memory gets embedded at the moment it's remembered. A hybrid retrieval pipeline merges four legs — semantic search over embedded content, keyword search over emails/calendar, decay-and-recency-ranked memory search, and recent events for context — with the PRD's explicit ranking rule: an active memory beats a superseded one every time (superseded memories are excluded from retrieval entirely, not just down-ranked), and among active memories, a fresher one can outrank an older, merely-more-similar one. Any message ending in `?` triggers the Ask flow: retrieval runs, results go into a clearly-delimited CONTEXT block the model is told never to treat as instructions (the PRD's structural-separation defense against injection from untrusted email content), and the answer gets sent back over Telegram. This is the milestone where the PRD's own cold-start test question first becomes answerable — see `src/eval/definition-of-done.ts`.
 
-Earlier: Milestone 2 (memory, correction, `/forget`, the tool registry/policy gate) and Milestone 1 (Telegram capture, voice transcription, classification) are both implemented and live-verified.
+Earlier: Milestones 1–3 (capture, memory/correction, Gmail/Calendar ingest) are all implemented and live-verified.
 
 ## Setup
 
@@ -71,10 +71,20 @@ Earlier: Milestone 2 (memory, correction, `/forget`, the tool registry/policy ga
       ```
       docker exec -it iris-postgres-1 psql -U iris -d iris -c "select key, last_synced_at, last_error from sync_state;"
       ```
+9. For unified search, backfill embeddings for anything captured before this milestone existed (memories, messages, emails already in the database). The first run downloads the embedding model (~90MB, cached after that):
+   ```
+   npm run backfill:embeddings
+   ```
+   New captures, memories, and emails get embedded automatically from here on — no need to re-run this except after a bulk data change.
 
 Message the bot on Telegram — it replies "got it." immediately. Text lands in `events` and gets classified in the background; a voice note gets transcribed first, and the transcript is then classified. A message classified as a fact or correction gets extracted into `memories` shortly after — check the admin UI or query the table directly to see it land.
 
 Try `/forget <something>` to see the approval flow: it finds matching memories, shows you what would be deleted, and only deletes them once you tap Approve on the Telegram card.
+
+Ask the bot a question ending in `?` to see unified search: it retrieves across memories, messages, emails, and calendar events, then replies with an answer grounded in whatever it actually found (never guessing beyond it). Try the admin UI's **Ask** page for the same thing without going through Telegram, or run the PRD's own definition-of-done test directly:
+```
+npm run eval:dod
+```
 
 Optional: to route capture/approval/brief traffic into a Telegram supergroup's topics, create the topics and set `TELEGRAM_CAPTURE_TOPIC_ID` / `TELEGRAM_APPROVALS_TOPIC_ID` / `TELEGRAM_BRIEF_TOPIC_ID` in `.env`.
 
@@ -100,12 +110,13 @@ Gmail/Calendar ingest silently does nothing: check `select * from sync_state;` �
 
 ## Layout
 
-- `src/bot` — Telegram long-poll process. Writes events, acknowledges instantly, enqueues background work. Does no reasoning itself.
-- `src/worker` — background process: transcription, classification, memory extraction, Gmail/Calendar ingest, and (later) detectors.
-- `src/admin` — debug UI: events, memories, emails, and sync health.
+- `src/bot` — Telegram long-poll process. Writes events, acknowledges instantly, enqueues background work (including the Ask flow for question-like text). Does no reasoning itself.
+- `src/worker` — background process: transcription, classification, memory extraction, Gmail/Calendar ingest, embedding, Ask, and (later) detectors.
+- `src/admin` — debug UI: events, memories, emails, sync health, and a page to test Ask directly.
 - `src/db` — Drizzle schema and Postgres client.
-- `src/lib` — shared core library: event ledger, queue, storage, Whisper/Ollama clients, memory (extraction/conflict-check/decay/forget), the tool registry/policy gate/actions ledger, secrets (macOS Keychain), and sync-state watermarks.
+- `src/lib` — shared core library: event ledger, queue, storage, Whisper/Ollama clients, memory (extraction/conflict-check/decay/forget), the tool registry/policy gate/actions ledger, secrets (macOS Keychain), sync-state watermarks, embeddings, hybrid retrieval, and the Ask flow.
 - `src/lib/google` — Gmail/Calendar API clients, OAuth, and failure classification.
-- `src/scripts` — one-off interactive scripts (Google OAuth consent flow).
+- `src/scripts` — one-off scripts (Google OAuth consent flow, embedding backfill).
+- `src/eval` — labeled evaluation scenarios, starting with the PRD's own definition-of-done question.
 - `docker/` — local Postgres + pgvector setup.
 - `docs/` — design docs.

@@ -8,6 +8,8 @@ export const QUEUES = {
   ingestGmail: "ingest-gmail",
   ingestCalendar: "ingest-calendar",
   extractEntities: "extract-entities",
+  embed: "embed",
+  ask: "ask",
 } as const;
 
 let boss: PgBoss | null = null;

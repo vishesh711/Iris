@@ -9,6 +9,7 @@ import { notifyOwner } from "../../lib/notify.js";
 import { getSyncState, recordSyncFailure, recordSyncSuccess, resetSyncState } from "../../lib/sync-state.js";
 import { getBoss, QUEUES } from "../../lib/queue.js";
 import type { ExtractEntityJobData } from "./extract-entities.js";
+import type { EmbedJobData } from "./embed.js";
 
 const SYNC_KEY = "gmail_history_id";
 
@@ -99,6 +100,11 @@ async function ingestOneMessage(auth: Awaited<ReturnType<typeof getAuthorizedCli
 
   const boss = await getBoss();
   await boss.send(QUEUES.extractEntities, { emailId: row.id } satisfies ExtractEntityJobData);
+  await boss.send(QUEUES.embed, {
+    sourceTable: "emails",
+    sourceId: row.id,
+    text: `${parsed.subject ?? ""}\n${parsed.bodyText ?? parsed.snippet ?? ""}`,
+  } satisfies EmbedJobData);
 }
 
 async function handleIngestError(err: unknown, hadStoredHistoryId: string | undefined): Promise<void> {

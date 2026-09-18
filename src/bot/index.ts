@@ -7,6 +7,7 @@ import { downloadTelegramFile } from "../lib/storage.js";
 import { getBoss, QUEUES } from "../lib/queue.js";
 import type { TranscribeJobData } from "../worker/jobs/transcribe.js";
 import type { ClassifyJobData } from "../worker/jobs/classify.js";
+import type { AskJobData } from "../worker/jobs/ask.js";
 import { registerForgetCommand } from "./commands/forget.js";
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -74,6 +75,13 @@ bot.on("message", async (ctx) => {
   }
 
   await boss.send(QUEUES.classify, { eventId: event.id, traceId } satisfies ClassifyJobData);
+
+  // A trivial, zero-cost check (no model call, so it doesn't slow the
+  // "got it." ack) — a real free-form question triggers the Ask flow
+  // alongside ordinary capture, not instead of it.
+  if ("text" in message && message.text.trim().endsWith("?")) {
+    await boss.send(QUEUES.ask, { eventId: event.id } satisfies AskJobData);
+  }
 });
 
 bot.launch();

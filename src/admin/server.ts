@@ -3,6 +3,7 @@ import { desc } from "drizzle-orm";
 import express from "express";
 import { db } from "../db/client.js";
 import { calendarEvents, emails, events, memories, syncState } from "../db/schema.js";
+import { answerQuestion } from "../lib/ask.js";
 import { decayWeight, type DecayClass } from "../lib/decay.js";
 
 const PORT = Number(process.env.ADMIN_PORT ?? 4000);
@@ -35,7 +36,7 @@ function layout(title: string, body: string): string {
 </style>
 </head>
 <body>
-<nav><a href="/events">Events</a><a href="/memories">Memories</a><a href="/emails">Emails</a><a href="/health">Health</a></nav>
+<nav><a href="/events">Events</a><a href="/memories">Memories</a><a href="/emails">Emails</a><a href="/health">Health</a><a href="/ask">Ask</a></nav>
 <h1>${escapeHtml(title)}</h1>
 ${body}
 </body>
@@ -157,6 +158,27 @@ ${syncRows
 </table>
 <p>${emailCount} emails ingested, ${calendarCount} calendar events ingested.</p>`;
     res.send(layout("System health", body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/ask", async (req, res, next) => {
+  try {
+    const question = typeof req.query.q === "string" ? req.query.q : "";
+    const form = `<form method="get" action="/ask">
+<input name="q" type="text" style="width: 70%; padding: 6px;" placeholder="Ask a question..." value="${escapeHtml(question)}">
+<button type="submit">Ask</button>
+</form>`;
+
+    if (!question.trim()) {
+      res.send(layout("Ask", form));
+      return;
+    }
+
+    const answer = await answerQuestion(question);
+    const body = `${form}<h2>Question</h2><p>${escapeHtml(question)}</p><h2>Answer</h2><pre>${escapeHtml(answer)}</pre>`;
+    res.send(layout("Ask", body));
   } catch (err) {
     next(err);
   }

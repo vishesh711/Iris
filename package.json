@@ -9,12 +9,15 @@
     "dev:worker": "tsx watch src/worker/index.ts",
     "dev:admin": "tsx watch src/admin/server.ts",
     "google:auth-setup": "tsx src/scripts/google-auth-setup.ts",
+    "backfill:embeddings": "tsx src/scripts/backfill-embeddings.ts",
+    "eval:dod": "tsx src/eval/definition-of-done.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
+    "@xenova/transformers": "^2.17.2",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.45.2",
     "express": "^4.19.2",
