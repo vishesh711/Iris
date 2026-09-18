@@ -1,20 +1,24 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { actions } from "../db/schema.js";
+import { sendApprovalCard } from "./telegram-cards.js";
 import { getToolDefinition } from "./tools/registry.js";
-import { evaluateAction, type PolicyDecision } from "./tools/policy-gate.js";
+import { evaluateAction, isFailureCircuitTripped, type PolicyDecision } from "./tools/policy-gate.js";
 import { deriveIdempotencyKey } from "./idempotency.js";
+import { isLineageUntrusted } from "./untrusted-lineage.js";
 
 export type ActionRow = typeof actions.$inferSelect;
 
 /**
  * The planner never calls a side-effecting tool directly — it proposes.
- * This writes the actions row, runs the deterministic policy gate, and
- * — since there is no separate executor process until Milestone 6 —
- * synchronously executes tier 0/1 decisions here. Tier 2 (or untrusted)
- * decisions are left in 'proposed' status for an explicit approve/reject.
- * Idempotent: a second proposal with identical tool+args returns the
- * existing row instead of creating a duplicate.
+ * This writes the actions row and runs the deterministic policy gate.
+ * Nothing executes here anymore (Milestone 6): a separate executor
+ * process is the only thing that ever runs a tool handler, polling for
+ * 'approved' rows, so a crash between decision and execution can't
+ * silently lose or duplicate work. Tier 2 (or untrusted) decisions stay
+ * 'proposed' for an explicit approve/reject, which sends a real
+ * approval card. Idempotent: a second proposal with identical tool+args
+ * returns the existing row instead of creating a duplicate.
  */
 export async function proposeAction(params: {
   tool: string;
@@ -24,7 +28,18 @@ export async function proposeAction(params: {
   untrusted?: boolean;
 }): Promise<{ action: ActionRow; decision: PolicyDecision }> {
   const definition = getToolDefinition(params.tool);
-  const decision = evaluateAction({ tool: params.tool, untrusted: params.untrusted });
+
+  // Untrusted lineage (invariant 7) overrides whatever the caller passed
+  // — content derived from untrusted source material stays untrusted no
+  // matter what the immediate caller believes about it.
+  const lineageUntrusted = params.sourceEventId ? await isLineageUntrusted(params.sourceEventId) : false;
+  const untrusted = (params.untrusted ?? false) || lineageUntrusted;
+
+  let decision = evaluateAction({ tool: params.tool, untrusted });
+  if (decision === "approved" && (await isFailureCircuitTripped())) {
+    decision = "queued";
+  }
+
   const idempotencyKey = deriveIdempotencyKey(params.tool, params.args);
 
   const [existing] = await db.select().from(actions).where(eq(actions.idempotencyKey, idempotencyKey));
@@ -46,15 +61,14 @@ export async function proposeAction(params: {
       tier,
       status,
       sourceEventId: params.sourceEventId,
-      untrusted: params.untrusted ?? false,
+      untrusted,
       idempotencyKey,
       decidedAt: decision === "queued" ? undefined : new Date(),
     })
     .returning();
 
-  if (decision === "approved") {
-    const executed = await executeAction(row);
-    return { action: executed, decision };
+  if (decision === "queued") {
+    await sendApprovalCard(row);
   }
 
   return { action: row, decision };
@@ -96,13 +110,17 @@ export async function approveAction(actionId: string): Promise<ActionRow> {
     return action;
   }
 
+  // Marks it approved and stops there — the executor process picks up
+  // 'approved' rows on its own poll and sends a follow-up once it's done,
+  // rather than this call (which may be a Telegram callback handler with
+  // its own timeout) waiting on the handler to finish.
   const [updated] = await db
     .update(actions)
     .set({ status: "approved", decidedAt: new Date() })
     .where(eq(actions.id, actionId))
     .returning();
 
-  return executeAction(updated);
+  return updated;
 }
 
 export async function rejectAction(actionId: string): Promise<ActionRow> {

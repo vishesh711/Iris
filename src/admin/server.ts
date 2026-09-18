@@ -2,7 +2,7 @@ import "dotenv/config";
 import { desc } from "drizzle-orm";
 import express from "express";
 import { db } from "../db/client.js";
-import { calendarEvents, emails, events, memories, ruleRuns, rules, syncState } from "../db/schema.js";
+import { actions, calendarEvents, emails, events, memories, ruleRuns, rules, syncState } from "../db/schema.js";
 import { answerQuestion } from "../lib/ask.js";
 import { decayWeight, type DecayClass } from "../lib/decay.js";
 import { dismissNudge, listActiveNudges } from "../lib/nudges.js";
@@ -37,7 +37,7 @@ function layout(title: string, body: string): string {
 </style>
 </head>
 <body>
-<nav><a href="/events">Events</a><a href="/memories">Memories</a><a href="/emails">Emails</a><a href="/health">Health</a><a href="/ask">Ask</a><a href="/nudges">Nudges</a></nav>
+<nav><a href="/events">Events</a><a href="/memories">Memories</a><a href="/emails">Emails</a><a href="/health">Health</a><a href="/ask">Ask</a><a href="/nudges">Nudges</a><a href="/actions">Actions</a></nav>
 <h1>${escapeHtml(title)}</h1>
 ${body}
 </body>
@@ -247,6 +247,33 @@ app.post("/nudges/:id/dismiss", async (req, res, next) => {
   try {
     await dismissNudge(req.params.id);
     res.redirect("/nudges");
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/actions", async (_req, res, next) => {
+  try {
+    const rows = await db.select().from(actions).orderBy(desc(actions.proposedAt)).limit(100);
+    const body = `<table>
+<tr><th>Proposed</th><th>Tool</th><th>Tier</th><th>Status</th><th>Untrusted</th><th>Rationale</th><th>Args</th><th>Result</th><th>Undo</th></tr>
+${rows
+  .map(
+    (row) => `<tr>
+<td>${escapeHtml(row.proposedAt.toISOString())}</td>
+<td>${escapeHtml(row.tool)}</td>
+<td>${row.tier}</td>
+<td>${escapeHtml(row.status)}</td>
+<td>${row.untrusted ? "⚠️ yes" : "no"}</td>
+<td>${row.rationale ? escapeHtml(row.rationale) : '<span class="muted">—</span>'}</td>
+<td>${renderJson(row.args)}</td>
+<td>${renderJson(row.result)}</td>
+<td>${row.undoPayload ? renderJson(row.undoPayload) : '<span class="muted">not available</span>'}</td>
+</tr>`
+  )
+  .join("\n")}
+</table>`;
+    res.send(layout(`Tool call audit (${rows.length})`, body));
   } catch (err) {
     next(err);
   }

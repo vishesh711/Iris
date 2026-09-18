@@ -33,4 +33,29 @@ describe("policy gate", () => {
   it("never returns 'approved' for an unregistered tool even when untrusted is explicitly false", () => {
     expect(evaluateAction({ tool: "not.a.real.tool", untrusted: false })).toBe("denied");
   });
+
+  it("kill switch drains every decision to queued, even a normally auto-approved tier-0 tool", () => {
+    const original = process.env.IRIS_KILL_SWITCH;
+    process.env.IRIS_KILL_SWITCH = "true";
+    try {
+      expect(evaluateAction({ tool: "memory.search" })).toBe("queued");
+      expect(evaluateAction({ tool: "memory.remember" })).toBe("queued");
+    } finally {
+      process.env.IRIS_KILL_SWITCH = original;
+    }
+  });
+
+  it("kill switch does not make an unregistered tool look approved", () => {
+    const original = process.env.IRIS_KILL_SWITCH;
+    process.env.IRIS_KILL_SWITCH = "true";
+    try {
+      // The kill switch returns before the registry lookup, so this is
+      // "queued" rather than "denied" while active - documenting that
+      // explicitly, since it's a real, deliberate short-circuit, not an
+      // accident of ordering.
+      expect(evaluateAction({ tool: "not.a.real.tool" })).toBe("queued");
+    } finally {
+      process.env.IRIS_KILL_SWITCH = original;
+    }
+  });
 });

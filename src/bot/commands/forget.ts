@@ -1,5 +1,5 @@
-import { Markup, type Telegraf } from "telegraf";
-import { approveAction, proposeAction, rejectAction } from "../../lib/actions.js";
+import type { Telegraf } from "telegraf";
+import { proposeAction } from "../../lib/actions.js";
 import { recordEvent } from "../../lib/events.js";
 import { previewForget } from "../../lib/memory.js";
 
@@ -8,7 +8,9 @@ import { previewForget } from "../../lib/memory.js";
  * default for a correction, but the wrong one for a deliberate erase
  * request). It still goes through proposeAction like any other tier-2
  * tool — no bypass for arriving as a slash command — so it gets the same
- * approval card, audit trail, and idempotency guarantee.
+ * approval card (sent by proposeAction itself; see telegram-cards.ts and
+ * approvals.ts's generic approve/reject handler), audit trail, and
+ * idempotency guarantee.
  */
 export function registerForgetCommand(bot: Telegraf): void {
   bot.command("forget", async (ctx) => {
@@ -37,46 +39,15 @@ export function registerForgetCommand(bot: Telegraf): void {
       .map((memory) => `- ${memory.statement}`)
       .join("\n")}`;
 
-    const { action, decision } = await proposeAction({
+    const { decision } = await proposeAction({
       tool: "memory.forget",
       args: { target, matchedIds: matches.map((memory) => memory.id) },
       rationale,
       sourceEventId: event.id,
     });
 
-    if (decision === "queued") {
-      const keyboard = Markup.inlineKeyboard([
-        Markup.button.callback("Approve", `forget:approve:${action.id}`),
-        Markup.button.callback("Reject", `forget:reject:${action.id}`),
-      ]);
-      await ctx.reply(`${rationale}\n\nApprove this deletion?`, {
-        reply_markup: keyboard.reply_markup,
-        message_thread_id: threadId,
-      });
-    } else {
-      await ctx.reply(`Action ${decision}.`, { message_thread_id: threadId });
-    }
-  });
-
-  bot.action(/^forget:(approve|reject):(.+)$/, async (ctx) => {
-    const decisionKind = ctx.match[1];
-    const actionId = ctx.match[2];
-
-    const updated = decisionKind === "approve" ? await approveAction(actionId) : await rejectAction(actionId);
-
-    const deletedCount =
-      updated.status === "done" && updated.result && typeof updated.result === "object"
-        ? (updated.result as { deletedCount?: number }).deletedCount
-        : undefined;
-
-    const summary =
-      decisionKind === "approve"
-        ? updated.status === "done"
-          ? `Approved. Deleted ${deletedCount ?? 0} memories.`
-          : `Approved, but execution ${updated.status}.`
-        : "Rejected. Nothing was deleted.";
-
-    await ctx.editMessageText(summary, { reply_markup: { inline_keyboard: [] } });
-    await ctx.answerCbQuery();
+    await ctx.reply(decision === "queued" ? "Sent for approval — check the approvals topic." : `Action ${decision}.`, {
+      message_thread_id: threadId,
+    });
   });
 }

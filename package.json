@@ -8,6 +8,7 @@
     "dev:bot": "tsx watch src/bot/index.ts",
     "dev:worker": "tsx watch src/worker/index.ts",
     "dev:admin": "tsx watch src/admin/server.ts",
+    "dev:executor": "tsx watch src/executor/index.ts",
     "google:auth-setup": "tsx src/scripts/google-auth-setup.ts",
     "backfill:embeddings": "tsx src/scripts/backfill-embeddings.ts",
     "eval:dod": "tsx src/eval/definition-of-done.ts",

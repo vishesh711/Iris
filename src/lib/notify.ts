@@ -1,4 +1,5 @@
 import { Telegram } from "telegraf";
+import type { InlineKeyboardMarkup } from "telegraf/types";
 
 let telegram: Telegram | null = null;
 
@@ -13,17 +14,25 @@ function getTelegram(): Telegram | null {
 
 /**
  * Sends a message directly via the Bot API, without needing a running
- * long-poll bot instance — used both for worker-raised alerts and for the
- * Ask flow's answers, neither of which have a live Telegraf context to
- * reply through.
+ * long-poll bot instance — used for worker/executor-raised alerts, the
+ * Ask flow's answers, and approval cards, none of which have a live
+ * Telegraf context to reply through.
  */
-export async function sendMessage(chatId: string | number, text: string, threadId?: number): Promise<void> {
+export async function sendMessage(
+  chatId: string | number,
+  text: string,
+  threadId?: number,
+  replyMarkup?: InlineKeyboardMarkup
+): Promise<void> {
   const client = getTelegram();
   if (!client) {
     console.error("TELEGRAM_BOT_TOKEN is not set; dropping message:", text);
     return;
   }
-  await client.sendMessage(chatId, text, threadId ? { message_thread_id: threadId } : undefined);
+  await client.sendMessage(chatId, text, {
+    ...(threadId ? { message_thread_id: threadId } : {}),
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+  });
 }
 
 export async function notifyOwner(text: string, threadId?: number): Promise<void> {

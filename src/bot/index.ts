@@ -9,6 +9,7 @@ import type { TranscribeJobData } from "../worker/jobs/transcribe.js";
 import type { ClassifyJobData } from "../worker/jobs/classify.js";
 import type { AskJobData } from "../worker/jobs/ask.js";
 import { registerForgetCommand } from "./commands/forget.js";
+import { registerApprovalHandlers } from "./commands/approvals.js";
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
@@ -22,6 +23,7 @@ const bot = new Telegraf(token);
 // (including their own recordEvent call) and never also get treated as
 // an ordinary capture-and-classify message below.
 registerForgetCommand(bot);
+registerApprovalHandlers(bot);
 
 bot.on("message", async (ctx) => {
   const message = ctx.message as Message;
