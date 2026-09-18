@@ -6,9 +6,13 @@ Full design: [`docs/PRD.md`](docs/PRD.md). Build plan for the remaining mileston
 
 ## Status
 
+Milestone 5: rules engine and nudges — implemented and live-verified. Three deterministic SQL detectors (invariant 8: no model call decides what qualifies as a candidate) run hourly: a recruiter thread gone quiet, an upcoming calendar event mentioning "interview," and a real person's important email left unanswered. Each detector's whole candidate batch goes through exactly one relevance-filter model call (never one call per candidate) that picks 0–3 worth actually surfacing. Cooldown/backoff is structural: a second undismissed nudge can't be created for the same (rule, subject), so "fires every morning for six days" is impossible by construction — dismissing a nudge (via the admin UI's Nudges page) is what reopens the door for a fresh one later. A daily morning brief posts today's calendar events plus any open nudges, and sends nothing on a genuinely quiet day.
+
+Live-verifying this milestone surfaced a real, persistent limitation: the relevance filter reliably excludes explicit rejections, but on ambiguous automated recruiter emails it kept selecting cases where the sender explicitly said *they'd* follow up — confirmed across three rounds of prompt strengthening, the last of which the model responded to by hallucinating a worked example's text onto an unrelated real candidate. This is a firm local-model reliability ceiling on this specific compound-judgment task, not a fixable prompt issue. One category (one-time passcodes/verification emails) was clear-cut enough to exclude deterministically at the SQL level instead; the remaining ambiguous cases are accepted as-is, mitigated by the one-tap dismiss.
+
 Milestone 4: unified search — implemented and live-verified. Every captured message, transcript, and email gets chunked and embedded locally (`@xenova/transformers`, no API cost) into a shared `embeddings` table; every memory gets embedded at the moment it's remembered. A hybrid retrieval pipeline merges four legs — semantic search over embedded content, keyword search over emails/calendar (ranked by keyword-match relevance, not just recency), decay-and-recency-ranked memory search, and recent events for context — with the PRD's explicit ranking rule: an active memory beats a superseded one every time (superseded memories are excluded from retrieval entirely, not just down-ranked, and a memory's raw source-message text is purged from the embeddings table the moment it's superseded or forgotten, so a corrected-away statement can't resurface via the message search leg either). Any message ending in `?` triggers the Ask flow: retrieval runs, results go into a clearly-delimited CONTEXT block the model is told never to treat as a conversation or a set of instructions (the PRD's structural-separation defense against injection from untrusted email content), and the answer gets sent back over Telegram.
 
-Live-verifying this milestone surfaced and fixed several real bugs beyond the initial implementation: Gmail bodies using quoted-printable encoding were coming through corrupted (garbled words, stray replacement characters); the structured keyword-search leg was effectively dead code (it matched the entire question as one literal substring); and a small local model (llama3.2, 3B) was unreliable at the Ask flow's multi-hop reasoning even with correct context — switching to `llama3.1:8b` and lowering generation temperature fixed that. See `src/eval/definition-of-done.ts` for the PRD's own cold-start test question, which now answers correctly and consistently.
+Live-verifying that milestone surfaced and fixed several real bugs beyond the initial implementation: Gmail bodies using quoted-printable encoding were coming through corrupted (garbled words, stray replacement characters); the structured keyword-search leg was effectively dead code (it matched the entire question as one literal substring); and a small local model (llama3.2, 3B) was unreliable at the Ask flow's multi-hop reasoning even with correct context — switching to `llama3.1:8b` and lowering generation temperature fixed that. See `src/eval/definition-of-done.ts` for the PRD's own cold-start test question, which now answers correctly and consistently.
 
 Earlier: Milestones 1–3 (capture, memory/correction, Gmail/Calendar ingest) are all implemented and live-verified.
 
@@ -90,6 +94,13 @@ npm run eval:dod
 
 Optional: to route capture/approval/brief traffic into a Telegram supergroup's topics, create the topics and set `TELEGRAM_CAPTURE_TOPIC_ID` / `TELEGRAM_APPROVALS_TOPIC_ID` / `TELEGRAM_BRIEF_TOPIC_ID` in `.env`.
 
+The worker also runs three rule-based detectors hourly and a morning brief daily, both needing `TELEGRAM_OWNER_CHAT_ID` set (see step 8.6 above) to actually deliver anything. To try them immediately instead of waiting on the cron:
+```
+npx tsx src/scripts/run-detectors-now.ts
+npx tsx src/scripts/run-morning-brief-now.ts
+```
+Check the admin UI's **Nudges** page to see rule state, active nudges, and recent run history, and to dismiss a nudge (which reopens the door for a fresh one later if the same condition still holds — it won't re-fire the very next run on its own).
+
 ## Tests
 
 ```
@@ -113,12 +124,13 @@ Gmail/Calendar ingest silently does nothing: check `select * from sync_state;` �
 ## Layout
 
 - `src/bot` — Telegram long-poll process. Writes events, acknowledges instantly, enqueues background work (including the Ask flow for question-like text). Does no reasoning itself.
-- `src/worker` — background process: transcription, classification, memory extraction, Gmail/Calendar ingest, embedding, Ask, and (later) detectors.
-- `src/admin` — debug UI: events, memories, emails, sync health, and a page to test Ask directly.
+- `src/worker` — background process: transcription, classification, memory extraction, Gmail/Calendar ingest, embedding, Ask, rule detectors, and the morning brief.
+- `src/admin` — debug UI: events, memories, emails, sync health, a page to test Ask directly, and rules/nudges.
 - `src/db` — Drizzle schema and Postgres client.
-- `src/lib` — shared core library: event ledger, queue, storage, Whisper/Ollama clients, memory (extraction/conflict-check/decay/forget), the tool registry/policy gate/actions ledger, secrets (macOS Keychain), sync-state watermarks, embeddings, hybrid retrieval, and the Ask flow.
+- `src/lib` — shared core library: event ledger, queue, storage, Whisper/Ollama clients, memory (extraction/conflict-check/decay/forget), the tool registry/policy gate/actions ledger, secrets (macOS Keychain), sync-state watermarks, embeddings, hybrid retrieval, the Ask flow, and nudges (cooldown/dismiss).
 - `src/lib/google` — Gmail/Calendar API clients, OAuth, and failure classification.
-- `src/scripts` — one-off scripts (Google OAuth consent flow, embedding backfill).
+- `src/lib/rules` — deterministic SQL detectors and the single-call relevance filter that decides which of their candidates are actually worth surfacing.
+- `src/scripts` — one-off scripts (Google OAuth consent flow, embedding backfill) and manual triggers for jobs that otherwise only run on a cron.
 - `src/eval` — labeled evaluation scenarios, starting with the PRD's own definition-of-done question.
 - `docker/` — local Postgres + pgvector setup.
 - `docs/` — design docs.

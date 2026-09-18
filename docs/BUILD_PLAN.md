@@ -11,7 +11,7 @@ Each milestone below reuses the existing conventions from Milestone 0/1: `record
 
 New dependencies get added incrementally per milestone (pg-boss, Ollama client, a local Whisper binary wrapper, `@xenova/transformers` for embeddings, `keytar` for OS keychain, `vitest` for tests) — never all at once.
 
-**Status:** Milestones 1, 2, 3, and 4 are implemented and live-verified (see below). Milestones 5–7 are planned but not yet built.
+**Status:** Milestones 1, 2, 3, 4, and 5 are implemented and live-verified (see below). Milestones 6–7 are planned but not yet built.
 
 ---
 
@@ -131,22 +131,23 @@ Two real prompt-quality bugs were found and fixed during this live verification 
 
 ---
 
-## Milestone 5 — Rules engine and nudges
+## Milestone 5 — Rules engine and nudges ✅ implemented and live-verified
 
 **Scope (PRD: nudges DDL, three named detectors, cooldown/backoff, morning brief):**
 
-**New files:**
-- `src/worker/jobs/run-detectors.ts` — cron, runs each enabled rule's SQL, logs to `rule_runs`.
-- `src/lib/rules/detectors/recruiter-follow-up.ts`, `upcoming-interview.ts`, `unanswered-important-email.ts` — deterministic SQL only (invariant 8: rules operate without the model).
-- `src/worker/jobs/relevance-filter.ts` — **one** model call per detector run reviewing the whole candidate batch, picking 0–3 — not one call per candidate.
-- `src/lib/nudges.ts` — cooldown/backoff logic on top of the unique partial index, addressing the "fires every morning for six days" failure mode directly.
-- `src/worker/jobs/morning-brief.ts` — scheduled post to the brief topic; sends nothing on a quiet day (invariant 9: silence is a valid success, never force a message to prove liveness).
+**Files:**
+- `src/worker/jobs/run-detectors.ts` — hourly cron, runs each enabled rule's SQL, logs to `rule_runs` (candidate count or error either way, so a quiet rule is distinguishable from a broken one).
+- `src/lib/rules/detectors/recruiter-follow-up.ts`, `upcoming-interview.ts`, `unanswered-important-email.ts` — deterministic SQL only (invariant 8: rules operate without the model). Cooldown windows (`RECRUITER_FOLLOWUP_STALE_HOURS` / `UNANSWERED_EMAIL_STALE_HOURS`) are env-configurable, defaulting to 72h/48h.
+- `src/lib/rules/relevance-filter.ts` — **one** model call per detector run reviewing the whole candidate batch, picking 0–3 — not one call per candidate.
+- `src/lib/nudges.ts` — `proposeNudge()`: cooldown/backoff is structural, not a timer — a second undismissed nudge for the same (rule, subject) simply cannot be created, so "fires every morning for six days" is impossible by construction. Uses the DB partial unique index for entity-backed candidates, an app-level `dedupeKey` check (race-safe against a unique-violation) for the one rule with no entity to key off of.
+- `src/worker/jobs/morning-brief.ts` — daily cron, posts today's calendar events plus any still-open nudges; sends nothing on a quiet day (invariant 9: silence is a valid success, never force a message to prove liveness).
+- Debug UI gains a Nudges page: rules and their enabled state, active nudges with a one-click dismiss, and recent `rule_runs` history.
 
-**Data model:** `nudges` exactly per PRD DDL (including the unique partial index on `(rule_id, entity_id) where dismissed = false`); `rules(id uuid pk, name text, description text, sql_definition text, importance_weight numeric, enabled boolean default true, created_at timestamptz default now())`; `rule_runs(id uuid pk, rule_id references rules(id), ran_at timestamptz default now(), candidate_count int, error text)` — inferred, needed for the debug UI's rule-run-history view.
+**Data model:** `nudges`, `rules`, `rule_runs`, all per the plan's original design, including the unique partial index on `(rule_id, entity_id) where dismissed = false`.
 
-**Cross-cutting:** debug UI gains rule run history, active watches, and completes system health (worker liveness, queue depth via pg-boss, last scheduler run).
+**Live-verified**, including one real judgment finding: the relevance filter reliably excludes explicit rejections, but on ambiguous automated recruiter emails it inconsistently selected cases where the sender explicitly said *they'd* follow up (not the person) — confirmed across three rounds of prompt strengthening (plain rule → explicit exclusion list → worked examples), the last of which the model responded to by hallucinating a worked example's text onto an unrelated real candidate. This is a firm reliability ceiling for the local model on this specific compound-judgment task, not a fixable prompt bug. One category (one-time passcodes/verification emails) was clear-cut enough to exclude deterministically at the SQL level instead of leaving it to model judgment — the remaining ambiguous cases are accepted as-is, mitigated by the nudge dismiss button, which costs one tap versus a fabricated fact costing trust.
 
-**Verification:** seed fixtures triggering all three named detectors; confirm `rule_runs` logs each pass and the relevance filter selects correctly; re-run the same pass — no duplicate nudge, no same-day re-notification; dismiss a nudge — it doesn't reappear; a day with nothing to surface produces genuine silence.
+Confirmed against real data: detector SQL correctly finds real candidates (verified by temporarily relaxing the cooldown window via its env var); `rule_runs` logs every pass; re-running an unchanged day produces zero duplicate nudges; dismissing a nudge correctly reopens the door for a fresh one if the same condition still holds on a later run (rather than either re-firing immediately or being suppressed forever); a real nudge delivers correctly over Telegram; the morning brief posts exactly the expected content when there's an open nudge, and stays completely silent when there's nothing to report.
 
 ---
 
@@ -235,4 +236,4 @@ Each milestone section above has its own concrete test. The two checkpoints that
 
 ## Next step
 
-Milestone 5 — rules engine and nudges.
+Milestone 6 — action ledger and shadow mode.
