@@ -2,7 +2,7 @@ import "dotenv/config";
 import { desc } from "drizzle-orm";
 import express from "express";
 import { db } from "../db/client.js";
-import { events, memories } from "../db/schema.js";
+import { calendarEvents, emails, events, memories, syncState } from "../db/schema.js";
 import { decayWeight, type DecayClass } from "../lib/decay.js";
 
 const PORT = Number(process.env.ADMIN_PORT ?? 4000);
@@ -35,7 +35,7 @@ function layout(title: string, body: string): string {
 </style>
 </head>
 <body>
-<nav><a href="/events">Events</a><a href="/memories">Memories</a></nav>
+<nav><a href="/events">Events</a><a href="/memories">Memories</a><a href="/emails">Emails</a><a href="/health">Health</a></nav>
 <h1>${escapeHtml(title)}</h1>
 ${body}
 </body>
@@ -105,6 +105,58 @@ ${rows
   .join("\n")}
 </table>`;
     res.send(layout(`Memories (${rows.length})`, body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/emails", async (_req, res, next) => {
+  try {
+    const rows = await db.select().from(emails).orderBy(desc(emails.receivedAt)).limit(50);
+    const body = `<table>
+<tr><th>Received</th><th>From</th><th>Subject</th><th>Snippet</th></tr>
+${rows
+  .map(
+    (row) => `<tr>
+<td>${row.receivedAt ? escapeHtml(row.receivedAt.toISOString()) : '<span class="muted">—</span>'}</td>
+<td>${escapeHtml(row.fromName ?? row.fromAddress ?? "")}</td>
+<td>${escapeHtml(row.subject ?? "")}</td>
+<td>${escapeHtml(row.snippet ?? "")}</td>
+</tr>`
+  )
+  .join("\n")}
+</table>`;
+    res.send(layout(`Emails (${rows.length})`, body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/health", async (_req, res, next) => {
+  try {
+    const [syncRows, emailCount, calendarCount] = await Promise.all([
+      db.select().from(syncState),
+      db.$count(emails),
+      db.$count(calendarEvents),
+    ]);
+    const now = Date.now();
+    const body = `<table>
+<tr><th>Source</th><th>Last synced</th><th>Lag</th><th>Last error</th></tr>
+${syncRows
+  .map((row) => {
+    const lagMs = row.lastSyncedAt ? now - row.lastSyncedAt.getTime() : null;
+    const lagText = lagMs === null ? "never synced" : `${Math.round(lagMs / 1000)}s ago`;
+    return `<tr>
+<td>${escapeHtml(row.key)}</td>
+<td>${row.lastSyncedAt ? escapeHtml(row.lastSyncedAt.toISOString()) : '<span class="muted">—</span>'}</td>
+<td>${escapeHtml(lagText)}</td>
+<td>${row.lastError ? escapeHtml(row.lastError) : '<span class="muted">none</span>'}</td>
+</tr>`;
+  })
+  .join("\n")}
+</table>
+<p>${emailCount} emails ingested, ${calendarCount} calendar events ingested.</p>`;
+    res.send(layout("System health", body));
   } catch (err) {
     next(err);
   }
