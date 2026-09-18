@@ -1,7 +1,7 @@
 import "dotenv/config";
-import { eq, isNull, notInArray } from "drizzle-orm";
+import { and, eq, isNull, notInArray } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { emails, events, memories } from "../db/schema.js";
+import { embeddings, emails, events, memories } from "../db/schema.js";
 import { embedAndStoreChunks } from "../lib/embed-store.js";
 import { embedText } from "../lib/embeddings.js";
 import { extractMessageText } from "../lib/extract-text.js";
@@ -12,6 +12,13 @@ import { extractMessageText } from "../lib/extract-text.js";
  * invisible to search even though the pipeline now embeds everything
  * going forward. Safe to re-run: embedAndStoreChunks and the
  * embedding-is-null memory update are both idempotent.
+ *
+ * Also purges any existing event embedding that no longer qualifies
+ * under classify.ts's rules (fact/correction-labeled text, since that
+ * content already lives in memories.embedding with supersession
+ * tracking, or a question directed at Iris, which only pollutes future
+ * searches by matching itself) — this repairs data embedded before
+ * those rules existed.
  */
 async function main() {
   const memoriesWithoutEmbedding = await db.select().from(memories).where(isNull(memories.embedding));
@@ -25,12 +32,25 @@ async function main() {
     .select()
     .from(events)
     .where(notInArray(events.type, ["command", "correction"]));
-  console.log(`Backfilling up to ${capturedEvents.length} captured events...`);
+  console.log(`Processing ${capturedEvents.length} captured events...`);
+  let embedded = 0;
+  let purged = 0;
   for (const event of capturedEvents) {
     const text = extractMessageText(event.rawData);
-    if (!text) continue;
-    await embedAndStoreChunks("events", event.id, text);
+    const label = (event.metadata as { label?: string } | null)?.label;
+    const isQuestion = text.trim().endsWith("?");
+    if (text && label !== "fact" && label !== "correction" && !isQuestion) {
+      await embedAndStoreChunks("events", event.id, text);
+      embedded++;
+    } else {
+      const deleted = await db
+        .delete(embeddings)
+        .where(and(eq(embeddings.sourceTable, "events"), eq(embeddings.sourceId, event.id)))
+        .returning();
+      if (deleted.length > 0) purged++;
+    }
   }
+  console.log(`Embedded ${embedded} events, purged stale/excluded embeddings for ${purged} events.`);
 
   const allEmails = await db.select().from(emails);
   console.log(`Backfilling ${allEmails.length} emails...`);

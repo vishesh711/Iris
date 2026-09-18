@@ -33,9 +33,20 @@ export async function runClassifyJob(data: ClassifyJobData): Promise<void> {
     } satisfies ExtractMemoryJobData);
   }
 
-  await boss.send(QUEUES.embed, {
-    sourceTable: "events",
-    sourceId: event.id,
-    text,
-  } satisfies EmbedJobData);
+  // Facts/corrections are already captured - with supersession tracking
+  // - via memories.embedding. Embedding the raw event text too would
+  // create a permanent, supersession-blind duplicate: correct a fact
+  // later and the old statement still resurfaces here forever, since
+  // this table has no notion of "superseded". A question directed at
+  // Iris has no future recall value and only pollutes later searches by
+  // matching itself almost perfectly. Only free-standing conversational
+  // content (tasks, reminders, small talk) is worth indexing here.
+  const isQuestion = text.trim().endsWith("?");
+  if (label !== "fact" && label !== "correction" && !isQuestion) {
+    await boss.send(QUEUES.embed, {
+      sourceTable: "events",
+      sourceId: event.id,
+      text,
+    } satisfies EmbedJobData);
+  }
 }
