@@ -1,4 +1,5 @@
 import "dotenv/config";
+import "../lib/network.js";
 import { eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { actions } from "../db/schema.js";
@@ -98,7 +99,15 @@ async function pollOnce(): Promise<void> {
   const pending = await db.select().from(actions).where(eq(actions.status, "approved"));
   for (const action of pending) {
     const executed = await executeAction(action);
-    await notifyOwner(describeResult(executed));
+    // The action's own status is already persisted at this point — a
+    // failure to notify (e.g. a transient network blip reaching Telegram)
+    // must never look like the action itself failed, and must never stop
+    // the rest of this batch from being processed.
+    try {
+      await notifyOwner(describeResult(executed));
+    } catch (err) {
+      console.error(`Failed to send completion notification for action ${executed.id}:`, err);
+    }
   }
 }
 

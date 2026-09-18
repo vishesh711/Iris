@@ -1,4 +1,5 @@
 import "dotenv/config";
+import "../lib/network.js";
 import { getBoss, QUEUES } from "../lib/queue.js";
 import { runTranscribeJob, type TranscribeJobData } from "./jobs/transcribe.js";
 import { runClassifyJob, type ClassifyJobData } from "./jobs/classify.js";

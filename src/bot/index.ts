@@ -1,4 +1,5 @@
 import "dotenv/config";
+import "../lib/network.js";
 import { randomUUID } from "node:crypto";
 import { Telegraf } from "telegraf";
 import type { Message } from "telegraf/types";

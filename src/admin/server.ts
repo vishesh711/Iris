@@ -1,4 +1,5 @@
 import "dotenv/config";
+import "../lib/network.js";
 import { desc } from "drizzle-orm";
 import express from "express";
 import { db } from "../db/client.js";
