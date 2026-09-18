@@ -50,6 +50,10 @@ Optional: to route capture/approval/brief traffic into a Telegram supergroup's t
 
 `role "iris" does not exist` when running `db:migrate`, even after recreating the Docker volume: something else on your machine (Postgres.app, a Homebrew `postgresql` service) is already bound to the port Docker is trying to use and is intercepting the connection first. Check with `lsof -i :<port>`. Iris's own Postgres runs on host port **55432** (see `docker-compose.yml`) specifically to avoid the common 5432/5433 collisions; make sure `DATABASE_URL` in your `.env` matches (`.env.example` already does). If `docker compose up -d` itself fails with "address already in use" even right after a fresh `down -v`, that's usually Docker Desktop's own port-forwarding not having released yet — fully quit and reopen Docker Desktop (not just `docker compose down`) before retrying.
 
+Classification jobs failing with `connect ECONNREFUSED ::1:11434` even though Ollama is clearly running (`ollama list` works): Node resolved `localhost` to the IPv6 loopback address, but Ollama only listens on IPv4 (`127.0.0.1`). `.env.example`'s `OLLAMA_HOST` already uses `127.0.0.1` instead of `localhost` to sidestep this — make sure your own `.env` does too. Separately, if you started Ollama with a bare `ollama serve &` in a terminal, it dies when that terminal closes; run it via the Ollama.app menu bar app or `brew services start ollama` so it survives independently.
+
+A worker job repeatedly fails and gives up (shows `state: 'failed'` in `select * from pgboss.job`, not `retry` or `created`): that's pg-boss's normal behavior once a job exhausts its retries — it's dead-lettered, not silently lost or endlessly retried. Fix the underlying cause (usually Ollama/Whisper not reachable) and send a new message; the old failed job stays as a permanent record and won't reprocess on its own.
+
 ## Layout
 
 - `src/bot` — Telegram long-poll process. Writes events, acknowledges instantly, enqueues background work. Does no reasoning itself.
