@@ -2,6 +2,7 @@ import "dotenv/config";
 import { getBoss, QUEUES } from "../lib/queue.js";
 import { runTranscribeJob, type TranscribeJobData } from "./jobs/transcribe.js";
 import { runClassifyJob, type ClassifyJobData } from "./jobs/classify.js";
+import { runExtractMemoryJob, type ExtractMemoryJobData } from "./jobs/extract-memory.js";
 
 async function main() {
   const boss = await getBoss();
@@ -15,6 +16,12 @@ async function main() {
   await boss.work<ClassifyJobData>(QUEUES.classify, async (jobs) => {
     for (const job of jobs) {
       await runClassifyJob(job.data);
+    }
+  });
+
+  await boss.work<ExtractMemoryJobData>(QUEUES.extractMemory, async (jobs) => {
+    for (const job of jobs) {
+      await runExtractMemoryJob(job.data);
     }
   });
 

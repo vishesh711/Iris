@@ -7,6 +7,7 @@ import { downloadTelegramFile } from "../lib/storage.js";
 import { getBoss, QUEUES } from "../lib/queue.js";
 import type { TranscribeJobData } from "../worker/jobs/transcribe.js";
 import type { ClassifyJobData } from "../worker/jobs/classify.js";
+import { registerForgetCommand } from "./commands/forget.js";
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
@@ -14,6 +15,12 @@ if (!token) {
 }
 
 const bot = new Telegraf(token);
+
+// Registered before the generic message handler: Telegraf stops at the
+// first matching handler, so /forget messages are fully handled here
+// (including their own recordEvent call) and never also get treated as
+// an ordinary capture-and-classify message below.
+registerForgetCommand(bot);
 
 bot.on("message", async (ctx) => {
   const message = ctx.message as Message;

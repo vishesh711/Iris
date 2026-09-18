@@ -1,5 +1,4 @@
-const OLLAMA_HOST = process.env.OLLAMA_HOST ?? "http://localhost:11434";
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "llama3.2";
+import { ollamaGenerate } from "./ollama.js";
 
 export const CAPTURE_LABELS = ["fact", "task", "reminder", "correction", "conversation"] as const;
 export type CaptureLabel = (typeof CAPTURE_LABELS)[number];
@@ -14,24 +13,7 @@ Labels:
 Respond with only the label, nothing else.`;
 
 export async function classifyCapture(text: string): Promise<CaptureLabel> {
-  const response = await fetch(`${OLLAMA_HOST}/api/generate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: OLLAMA_MODEL,
-      system: SYSTEM_PROMPT,
-      prompt: text,
-      stream: false,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Ollama classify request failed: ${response.status}`);
-  }
-
-  const body = (await response.json()) as { response?: string };
-  const label = body.response?.trim().toLowerCase();
-  return (CAPTURE_LABELS as readonly string[]).includes(label ?? "")
-    ? (label as CaptureLabel)
-    : "conversation";
+  const raw = await ollamaGenerate(SYSTEM_PROMPT, text);
+  const label = raw.trim().toLowerCase();
+  return (CAPTURE_LABELS as readonly string[]).includes(label) ? (label as CaptureLabel) : "conversation";
 }
