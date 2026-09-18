@@ -6,7 +6,7 @@ Full design: [`docs/PRD.md`](docs/PRD.md). Build plan for the remaining mileston
 
 ## Status
 
-Milestone 1: capture is real. The bot process writes every message to the `events` ledger and acknowledges instantly; a separate worker process transcribes voice notes locally via Whisper and classifies captured text (fact / task / reminder / correction / conversation) via a local Ollama model, in the background, without slowing the "got it." reply.
+Milestone 2: memory and correction. On top of Milestone 1's capture pipeline, a fact or correction classified from a message now gets extracted into the `memories` table by a local model, with a conflict-check against existing memories for the same subject — contradicting facts supersede the old one and log a correction event, non-contradicting ones are added independently, and an exact restatement just bumps the memory's reinforcement count instead of duplicating it. Decay is computed at query time from `decay_class` and never stored. `/forget <target>` hard-deletes matching memories, but — like every tier-2 (external/irreversible) action — only after an explicit approve tap on a Telegram card; a minimal tool registry and deterministic policy gate enforce that tier-0/1 actions run automatically and tier-2 actions never do without approval. A local admin UI shows recent events and memories with their live decay weight.
 
 ## Setup
 
@@ -41,10 +41,25 @@ Milestone 1: capture is real. The bot process writes every message to the `event
    npm run dev:bot
    npm run dev:worker
    ```
+7. Optional: run the debug admin UI to browse events and memories:
+   ```
+   npm run dev:admin
+   ```
+   Then open http://localhost:4000.
 
-Message the bot on Telegram — it replies "got it." immediately. Text lands in `events` and gets classified in the background; a voice note gets transcribed first, and the transcript is then classified.
+Message the bot on Telegram — it replies "got it." immediately. Text lands in `events` and gets classified in the background; a voice note gets transcribed first, and the transcript is then classified. A message classified as a fact or correction gets extracted into `memories` shortly after — check the admin UI or query the table directly to see it land.
+
+Try `/forget <something>` to see the approval flow: it finds matching memories, shows you what would be deleted, and only deletes them once you tap Approve on the Telegram card.
 
 Optional: to route capture/approval/brief traffic into a Telegram supergroup's topics, create the topics and set `TELEGRAM_CAPTURE_TOPIC_ID` / `TELEGRAM_APPROVALS_TOPIC_ID` / `TELEGRAM_BRIEF_TOPIC_ID` in `.env`.
+
+## Tests
+
+```
+npm test
+```
+
+Runs the unit suite — decay curves, idempotency key derivation, memory extraction/conflict-check parsing, and the permission gate (the PRD calls this last one "the highest-value test file in the repository": every tier-2 tool must be denied automatic execution, and an unregistered tool must fail closed rather than default to permissive). These are all pure-logic tests with the LLM calls mocked; they don't need Postgres, Ollama, or Whisper running.
 
 ### Troubleshooting
 
@@ -57,8 +72,9 @@ A worker job repeatedly fails and gives up (shows `state: 'failed'` in `select *
 ## Layout
 
 - `src/bot` — Telegram long-poll process. Writes events, acknowledges instantly, enqueues background work. Does no reasoning itself.
-- `src/worker` — background process: transcription, classification, and (later) memory extraction, ingest, and detectors.
+- `src/worker` — background process: transcription, classification, memory extraction, and (later) ingest and detectors.
+- `src/admin` — debug UI (recent events, memory inspection today; more views land with later milestones).
 - `src/db` — Drizzle schema and Postgres client.
-- `src/lib` — shared core library (event ledger, queue, storage, Whisper/Ollama clients).
+- `src/lib` — shared core library: event ledger, queue, storage, Whisper/Ollama clients, memory (extraction/conflict-check/decay/forget), and the tool registry/policy gate/actions ledger.
 - `docker/` — local Postgres + pgvector setup.
 - `docs/` — design docs.

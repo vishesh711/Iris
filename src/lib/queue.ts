@@ -4,6 +4,7 @@ import PgBoss from "pg-boss";
 export const QUEUES = {
   transcribe: "transcribe",
   classify: "classify",
+  extractMemory: "extract-memory",
 } as const;
 
 let boss: PgBoss | null = null;

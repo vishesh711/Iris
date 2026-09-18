@@ -1,5 +1,7 @@
 import { classifyCapture } from "../../lib/classifier.js";
 import { getEvent, markEventProcessed } from "../../lib/events.js";
+import { getBoss, QUEUES } from "../../lib/queue.js";
+import type { ExtractMemoryJobData } from "./extract-memory.js";
 
 export interface ClassifyJobData {
   eventId: string;
@@ -27,4 +29,13 @@ export async function runClassifyJob(data: ClassifyJobData): Promise<void> {
 
   const label = await classifyCapture(text);
   await markEventProcessed(event.id, { label });
+
+  if (label === "fact" || label === "correction") {
+    const boss = await getBoss();
+    await boss.send(QUEUES.extractMemory, {
+      eventId: event.id,
+      label,
+      traceId: data.traceId,
+    } satisfies ExtractMemoryJobData);
+  }
 }

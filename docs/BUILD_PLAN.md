@@ -11,7 +11,7 @@ Each milestone below reuses the existing conventions from Milestone 0/1: `record
 
 New dependencies get added incrementally per milestone (pg-boss, Ollama client, a local Whisper binary wrapper, `@xenova/transformers` for embeddings, `keytar` for OS keychain, `vitest` for tests) — never all at once.
 
-**Status:** Milestone 1 is implemented (see below). Milestones 2–7 are planned but not yet built.
+**Status:** Milestones 1 and 2 are implemented (see below). Milestones 3–7 are planned but not yet built.
 
 ---
 
@@ -41,27 +41,29 @@ New dependencies get added incrementally per milestone (pg-boss, Ollama client, 
 
 ---
 
-## Milestone 2 — Memory and correction
+## Milestone 2 — Memory and correction ✅ implemented
 
 **Scope (PRD: memories DDL, Correct flow, tiers table):** the conflict-check, decay-at-query-time, supersession, `/forget` — and, pulled forward, the tool registry/policy gate/`actions` table, since `/forget` is tier 2.
 
-**New files:**
-- `src/lib/tools/registry.ts` — `{tool, tier, handler}` map; seed `memory.search` (0), `memory.remember` (1), `memory.forget` (2).
-- `src/lib/tools/policy-gate.ts` — pure, deterministic: tier 0/1 auto-approve, tier 2 queue, **gate unreachable/error → deny**. No model call in this file, ever.
-- `src/lib/idempotency.ts` — `deriveIdempotencyKey(tool, args)`, unit tested now.
-- `src/lib/actions.ts` — `proposeAction()`: writes the `actions` row, runs the gate, and — no async executor yet — synchronously executes tier 0/1 and posts an inline approve/reject message to the approvals topic for tier 2, executing on tap. Comment it clearly as a throwaway stand-in that M6's executor replaces.
-- `src/lib/decay.ts` — pure `decayWeight(decayClass, lastConfirmedAt, now)` for `identity`/`employment`/`preference`/`intent`/`scheduled`. Unit tested.
-- `src/lib/memory.ts` — `rememberFact()`, `conflictCheck()` (one model call classifying contradicts/extends/independent against nearest existing memories), `supersede()`, `searchMemories()` (applies `decay.ts` at query time only, never persisted).
-- `src/worker/jobs/extract-memory.ts` — consumes M1's classify output; on `contradicts`, supersede + append a `type: "correction"` event; on `extends`, insert independently (no supersession).
-- `src/bot/commands/forget.ts` — `/forget <target>` → `proposeAction("memory.forget", ...)`, goes through the same approval card as any other tier-2 action — no bypass for being a slash command.
-- `src/admin/server.ts`, `src/admin/views/events.ts`, `src/admin/views/memories.ts` — debug UI scaffold, first 2 of its eventual 6 views.
-- `vitest` added; `src/lib/policy-gate.test.ts` — first 3 permission-suite cases: `memory.forget` DENY without approval, `memory.search` ALLOW, gate-unreachable → DENY.
+**Files:**
+- `src/lib/tools/registry.ts` — `{tool, tier, handler}` map; `memory.search` (0), `memory.remember` (1), `memory.forget` (2, with a real handler wired to `executeForget`).
+- `src/lib/tools/policy-gate.ts` — `evaluateAction({tool, untrusted})`, pure and deterministic: tier 0/1 → `approved`, tier 2 or untrusted → `queued`, anything it can't evaluate (unregistered tool, malformed tier) → `denied`. No model call, ever; wrapped in try/catch so any internal error fails closed instead of throwing.
+- `src/lib/idempotency.ts` — `deriveIdempotencyKey(tool, args)`, a deterministic sha256 over `{tool, args}` with recursively sorted keys so key insertion order can't change the hash. Unit tested.
+- `src/lib/actions.ts` — `proposeAction()` writes the `actions` row, runs the gate, and — no async executor until M6 — synchronously executes tier 0/1 approvals inline; `approveAction()`/`rejectAction()` handle the tier-2 tap. Idempotent: a second proposal with an identical tool+args returns the existing row.
+- `src/lib/decay.ts` — pure `decayWeight()` for all 5 classes; `identity` never decays, `scheduled` is a hard cutoff at `valid_until`, the other three decay exponentially with a half-life that stretches with `reinforcement_count`. Unit tested (monotonicity, ordering across classes, reinforcement slowing decay, bounds).
+- `src/lib/ollama.ts` — extracted shared `ollamaGenerate()` call, reused by `classifier.ts` (Milestone 1) and the two new memory modules below.
+- `src/lib/memory-extraction.ts` — `extractMemoryCandidate()`: one model call producing a candidate statement/subject/predicate/object/decayClass, or `null` if nothing's worth storing. Defensively parsed (handles markdown-fenced JSON, malformed JSON, missing fields, an invalid decayClass) — never throws, always degrades to a safe default. Unit tested against a mocked model.
+- `src/lib/memory.ts` — `rememberFact()`, `checkConflict()` (the one-model-call-per-write contradicts/extends/independent classification against the nearest existing memories for the same subject; skips the model call entirely when there's nothing to compare against; falls back to `independent` on any parse failure rather than risking a wrongful supersession), `supersedeMemory()`, `bumpReinforcement()`, `previewForget()`/`executeForget()`, `searchMemories()` (applies `decay.ts` at query time only, never persisted). Unit tested.
+- `src/worker/jobs/extract-memory.ts` — consumes a `fact`/`correction` classification from Milestone 1's `classify.ts` (which now enqueues this job for those two labels): extracts a candidate, checks for an exact restatement (bumps reinforcement instead of duplicating), runs the conflict-check, and on `contradicts` supersedes the old memory and appends a `type: "correction"` event; on `extends`/`independent` inserts a new memory row.
+- `src/bot/commands/forget.ts` — `/forget <target>` previews matches, builds a rationale, and calls `proposeAction("memory.forget", ...)` — goes through the exact same approval card as any other tier-2 action, registered ahead of the generic message handler so it isn't double-processed as ordinary capture.
+- `src/admin/server.ts` — debug UI (Express), first 2 of its eventual 6 views: `/events` and `/memories` (with live decay weight computed per row).
+- `vitest` added, with a setup file providing a placeholder `DATABASE_URL` so pure-logic unit tests never need a real Postgres connection. `src/lib/tools/policy-gate.test.ts` is the permission suite: tier-2 not auto-approved, tier-0/1 auto-approved, an unregistered tool denied (the "gate errors" case, since this architecture's gate is local deterministic code with no separate service to be network-unreachable), and untrusted lineage forcing the queue regardless of tier (the flag is supported now; M6 adds the lineage-walking that sets it automatically).
 
-**Data model:** add `memories` and `actions`, using the PRD's exact DDL (including the `vector(384)` column on `memories` via a Drizzle `customType`, and the partial index `on actions (status, tier) where status in ('proposed','approved')`).
+**Data model:** `memories` and `actions`, matching the PRD's DDL exactly (verified against the generated migration SQL), plus one added index each (`memories(subject, status)`, and the PRD's own partial index on `actions(status, tier) where status in ('proposed','approved')`, confirmed present in the generated SQL with the correct `WHERE` clause).
 
-**Cross-cutting landed here:** tool registry/tiers/gate exist for the first time; `certainty` is an ordinal 3-value field (`asserted`/`inferred`/`contradicted`) enforced in the schema type, never a float; decay is computed only at query time — no cron, no stored/rewritten score; no `user_id` anywhere.
+**Cross-cutting landed here:** tool registry/tiers/gate exist for the first time; `certainty` and `decay_class` are text columns constrained by TS union types at the application layer, never a float; decay is computed only at query time — no cron, no stored/rewritten score; no `user_id` anywhere.
 
-**Verification:** state a fact → `memories` row with correct certainty/decay_class via the debug UI; contradict it → conflict-check fires, old row `superseded`, new row's `supersedes` set, correction event appended; `/forget` → approval card appears, Reject leaves data untouched, Approve hard-deletes and records `status='done'`; `vitest` green on the 3 current permission cases.
+**Verified:** `npm run typecheck` and `npm test` (32 tests) both pass. Not yet verified against a live bot/Postgres/Ollama by a human — do that next: state a fact, confirm a `memories` row with correct certainty/decay_class via `/memories`; contradict it, confirm the old row flips to `superseded` and a correction event appends; `/forget` something, confirm the approval card, and that Reject leaves data untouched while Approve deletes and records `status='done'`.
 
 ---
 
@@ -212,4 +214,4 @@ Each milestone section above has its own concrete test. The two checkpoints that
 
 ## Next step
 
-Milestone 2 — memory and correction, plus the tool registry/policy gate/`actions` table it pulls forward from M6.
+Milestone 3 — Gmail and Calendar read-only ingest (OAuth, history-API polling, upsert-on-provider-id, entity extraction). Before starting it, live-verify Milestone 2 against a real bot/Postgres/Ollama, per the verification note above.
