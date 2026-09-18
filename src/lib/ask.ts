@@ -7,6 +7,8 @@ You will be given a CONTEXT section: a list of independent, unrelated snippets (
 
 Answer the QUESTION using only what CONTEXT actually supports. The question may use general or colloquial words (like "recruiter" or "contract role") that don't literally appear in CONTEXT — use reasonable real-world judgment to connect them to what's actually there (a person coordinating a paid consulting or expert-network engagement is functioning as a recruiter for that engagement; a paid one-off engagement is a form of contract work) rather than refusing just because the exact word is missing. Never invent a fact, name, or number that isn't in CONTEXT — only connect the dots between what's there and how the question is phrased. If CONTEXT truly doesn't support an answer even with that judgment, say you don't know rather than guessing.
 
+When a question asks what the person decided, chose, or is doing, and CONTEXT contains both a "memory" item and an email/message with a different number or detail on the same topic, the memory is the person's own later, confirmed decision — prefer it over what a third party proposed or offered earlier by email.
+
 Do not describe or summarize what CONTEXT contains, and do not comment on confusion or mixed-up conversations — just answer the question directly and concisely, in at most two sentences.`;
 
 function formatContext(items: RetrievedItem[]): string {
