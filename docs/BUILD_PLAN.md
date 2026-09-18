@@ -11,7 +11,7 @@ Each milestone below reuses the existing conventions from Milestone 0/1: `record
 
 New dependencies get added incrementally per milestone (pg-boss, Ollama client, a local Whisper binary wrapper, `@xenova/transformers` for embeddings, `keytar` for OS keychain, `vitest` for tests) — never all at once.
 
-**Status:** Milestones 1 and 2 are implemented and live-verified (see below). Milestones 3–7 are planned but not yet built.
+**Status:** Milestones 1 and 2 are implemented and live-verified (see below). Milestone 3 is implemented but not yet live-verified (requires a real Google OAuth credential from the user). Milestones 4–7 are planned but not yet built.
 
 ---
 
@@ -69,27 +69,34 @@ Two real prompt-quality bugs were found and fixed during this live verification 
 
 ---
 
-## Milestone 3 — Gmail and Calendar read-only ingest
+## Milestone 3 — Gmail and Calendar read-only ingest ✅ implemented, not yet live-verified
 
-**Scope (PRD: ingest tables, entities, secrets handling):** OAuth, history-API polling, upsert-on-provider-id, entity extraction. Note: any `mcp__Gmail__*`-style tools available to an AI assistant session are not Iris's — Iris needs its own OAuth app and its own MCP client/server running in its own process.
+**Scope (PRD: ingest tables, entities, secrets handling):** OAuth, history-API polling, upsert-on-provider-id, entity extraction.
 
-**New files:**
-- `src/lib/secrets.ts` — OS keychain wrapper (`keytar`). Flag now: if Iris runs headless/containerized rather than on an actual desktop, there may be no Secret Service daemon — document an encrypted-local-file fallback (never `.env`) for that case.
-- `src/lib/google-auth.ts` + `src/scripts/google-auth-setup.ts` — one-time local OAuth consent, **read-only scopes only**, tokens → keychain.
-- `src/mcp/gmail-client.ts`, `src/mcp/calendar-client.ts` — the PRD's one correct use of MCP (third-party integration boundary); don't let this pattern spread to memory/events/rules.
-- `src/worker/jobs/ingest-gmail.ts` — polls Gmail History API using a stored `historyId` watermark, upserts into `emails` on `message_id` conflict.
-- `src/worker/jobs/ingest-calendar.ts` — Calendar incremental sync (`syncToken`), upserts into `calendar_events` on `provider_id` conflict.
-- `src/worker/jobs/extract-entities.ts` — classifies sender category (e.g. `recruiter`) into `entities`.
+**Two deliberate deviations from the plan as originally drafted, decided with the user before writing code:**
 
-**Data model (PRD gives prose, not DDL — inferred to match stated constraints):**
-- `emails(id uuid pk, message_id text unique not null, thread_id text, from_address text, from_name text, to_addresses jsonb, subject text, snippet text, body_text text, labels jsonb, entity_id uuid references entities(id), received_at timestamptz, raw jsonb, created_at timestamptz default now())`
-- `calendar_events(id uuid pk, provider_id text unique not null, calendar_id text, title text, description text, location text, start_at timestamptz, end_at timestamptz, all_day boolean, attendees jsonb, status text, updated_at timestamptz, raw jsonb, created_at timestamptz default now())`
-- `entities(id uuid pk, name text not null, type text not null, aliases jsonb, metadata jsonb, created_at timestamptz default now())`
-- `relations(id uuid pk, from_entity_id uuid references entities(id), to_entity_id uuid references entities(id), relation_type text, metadata jsonb, created_at timestamptz default now())`
+1. **Direct Google API client instead of MCP.** The PRD calls for Gmail/Calendar to go through MCP clients, on the theory of reusing existing servers and swappability. Neither benefit materializes here: there's no verified, well-maintained third-party Gmail/Calendar MCP server to point at, and building our own MCP server just so Iris can be the only client of it is pure protocol ceremony with no functional gain. Iris talks to Gmail/Calendar directly via Google's official `googleapis` client library (`src/lib/google/`) — the same "MCP is the wrong boundary" reasoning the PRD already applies to internal state (memory/events/rules) applies here too; the real MCP boundary in this codebase is simply narrower than the PRD first sketched. If a genuinely reusable Gmail/Calendar MCP server shows up later, this is the layer that would get swapped.
+2. **macOS `security` CLI instead of `keytar`.** `keytar` is archived/unmaintained upstream and needs a native compile step — exactly the kind of install friction Milestone 1/2 setup already hit repeatedly (Docker ports, Node version, Ollama). Since Iris runs on an actual Mac, shelling out to the same `security` binary Keychain Access.app itself uses (`src/lib/secrets.ts`) gets the OS-keychain requirement with zero new dependencies and no native-binding risk. The PRD's own fallback note (a headless/non-macOS environment needs an encrypted-file alternative) still applies if Iris ever runs somewhere else — not implemented, since it doesn't here.
 
-**Cross-cutting landed here (easiest to silently drop):** every Gmail-sourced `events` row gets `metadata.untrusted = true` at ingest time — nothing enforces on it until M6, but it can't be reconstructed later if skipped now. Also: the failure-classification taxonomy (`retryable`/`auth`/`rate_limit`/`invalid_input`/`provider_failure`/`internal_failure`) becomes real — `auth` failures must surface to Telegram immediately, not fail silently; external calls bounded at 10s. Debug UI gains partial system health (Gmail/Calendar sync lag).
+**Files:**
+- `src/lib/secrets.ts` — `security add-generic-password` / `find-generic-password` / `delete-generic-password` wrapper, one service name (`iris-agent`), keyed by account.
+- `src/lib/google/auth.ts` — OAuth2 client construction, refresh-token load/save via `secrets.ts`, **read-only scopes only** (`gmail.readonly`, `calendar.readonly`).
+- `src/scripts/google-auth-setup.ts` — one-time interactive consent flow: binds a local loopback server on an OS-assigned port (RFC 8252 native-app flow, works with a "Desktop app" OAuth client without pre-registering the port), prints the consent URL, exchanges the code, saves the refresh token.
+- `src/lib/google/gmail.ts` — `parseMessage()` (pure, unit tested) plus `getCurrentHistoryId`/`listInitialMessageIds`/`listMessageIdsSince`/`getMessage`, each request bounded to 10s.
+- `src/lib/google/calendar.ts` — `parseEvent()` (pure, unit tested) plus `listInitialEvents`/`listEventsSince`, same 10s bound. `timeMin` (initial backfill) and `syncToken` (incremental) are never combined in one request — Google's API rejects that.
+- `src/lib/google/errors.ts` — `classifyGoogleError()` into the PRD's six-way taxonomy, pure and unit tested; `extractHttpStatus()` exported separately so callers can detect the specific 404 (Gmail) / 410 (Calendar) "watermark expired" cases precisely rather than only the general class.
+- `src/lib/sync-state.ts` — `sync_state` watermark store; `recordSyncSuccess`/`recordSyncFailure` (message only) /`resetSyncState` (clears the stored value too, for the expired-watermark case).
+- `src/lib/notify.ts` — sends a Telegram message directly via the Bot API (no long-poll bot instance needed) for alerts the worker raises on its own.
+- `src/lib/entities.ts` — `classifySenderType()`, a deterministic keyword/domain heuristic (not a model call, matching invariant 8's spirit even though entity classification isn't a "rule" in the M5 sense) — unit tested, upgradeable to a model call later without touching anything downstream that reads `entity.type`.
+- `src/worker/jobs/ingest-gmail.ts` / `ingest-calendar.ts` — poll on a 5-minute cron (`boss.schedule`), upsert on `message_id`/`provider_id` (Gmail: `onConflictDoNothing`, since email content is immutable once fetched; Calendar: `onConflictDoUpdate`, since events genuinely change — reschedules, cancellations), tag every resulting `events` row `untrusted: true`, notify on the *transition* into an auth failure (not every poll while it stays broken), and reset the watermark on an expired historyId/syncToken rather than retrying it forever.
+- `src/worker/jobs/extract-entities.ts` — enqueued per new email, links `emails.entity_id`.
+- `src/admin/server.ts` — two more views: `/emails`, `/health` (sync lag + last error per source, total ingest counts).
 
-**Verification:** OAuth setup once, tokens confirmed in keychain not `.env`; first poll backfills both tables, a forced redundant poll produces zero duplicate rows; manually revoke the token and confirm an immediate auth-failure notice instead of silent quiet; a real recruiter email produces an `entities` row with `type='recruiter'`.
+**Data model:** `emails`, `calendar_events`, `entities`, `relations` — matching the PRD's prose description — plus `sync_state` (not named in the PRD; a plain necessity for incremental sync and restart safety, storing each source's watermark, last success time, and last error).
+
+**Cross-cutting landed here (easiest to silently drop):** every Gmail/Calendar-sourced `events` row gets `metadata.untrusted = true` at ingest time — nothing enforces on it until M6, but it can't be reconstructed later if skipped now. The failure-classification taxonomy becomes real; `auth` failures surface to Telegram immediately rather than letting ingest go silently quiet. External calls bounded at 10s.
+
+**Verified so far:** `npm run typecheck` and `npm test` (54 tests, 22 new) both pass. Unit tests cover the two trickiest pieces of pure logic in this milestone — Gmail message parsing (headers, multipart text extraction, missing-field handling) and Calendar event parsing (timed vs. all-day, missing attendees) — plus error classification and the recruiter heuristic. **Not yet verified live**, since it requires the user to set up a real Google Cloud OAuth credential (see README) — do that next: run the consent flow, confirm the token lands in Keychain (not `.env`), confirm a first poll backfills both tables, confirm a forced redundant poll produces zero duplicate rows, and confirm a real recruiter-ish email produces an `entities` row with `type='recruiter'`.
 
 ---
 
@@ -204,7 +211,7 @@ Two real prompt-quality bugs were found and fixed during this live verification 
 | Decay at query time, never stored | M2 |
 | Certainty as ordinal, not float | M2 |
 | No `user_id` / no `users` table | Every migration — treat as a standing check |
-| MCP boundary limited to Gmail/Calendar/web search | M3 |
+| MCP boundary limited to Gmail/Calendar/web search | Revised at M3 — no MCP used at all (direct Google API client instead, see M3's write-up); reassess if web research (M7+) turns out to have a real MCP server worth using |
 
 ## Invariants tracking
 
@@ -216,4 +223,4 @@ Each milestone section above has its own concrete test. The two checkpoints that
 
 ## Next step
 
-Milestone 3 — Gmail and Calendar read-only ingest (OAuth, history-API polling, upsert-on-provider-id, entity extraction).
+Live-verify Milestone 3 against a real Google account (see README's OAuth setup steps), then Milestone 4 — unified search (embeddings, hybrid retrieval, the ranking rule, the definition-of-done question).

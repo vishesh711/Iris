@@ -6,7 +6,9 @@ Full design: [`docs/PRD.md`](docs/PRD.md). Build plan for the remaining mileston
 
 ## Status
 
-Milestone 2: memory and correction. On top of Milestone 1's capture pipeline, a fact or correction classified from a message now gets extracted into the `memories` table by a local model, with a conflict-check against existing memories for the same subject — contradicting facts supersede the old one and log a correction event, non-contradicting ones are added independently, and an exact restatement just bumps the memory's reinforcement count instead of duplicating it. Decay is computed at query time from `decay_class` and never stored. `/forget <target>` hard-deletes matching memories, but — like every tier-2 (external/irreversible) action — only after an explicit approve tap on a Telegram card; a minimal tool registry and deterministic policy gate enforce that tier-0/1 actions run automatically and tier-2 actions never do without approval. A local admin UI shows recent events and memories with their live decay weight.
+Milestone 3: read-only Gmail and Calendar ingest, on top of Milestones 1–2's capture and memory pipeline. A background job polls Gmail's history API and Google Calendar's incremental sync every 5 minutes, upserting into `emails`/`calendar_events` on their provider ids so re-delivery never duplicates. Every Gmail/Calendar-sourced event is tagged `untrusted` in the ledger at ingest time. Senders get classified (currently a cheap keyword heuristic, e.g. `recruiter`) into an `entities` table. An expired Google token surfaces as an immediate Telegram alert instead of silently going quiet. The PRD calls for this to go through MCP clients; this build uses Google's official API client directly instead — see `docs/BUILD_PLAN.md` for why.
+
+Earlier: Milestone 2 (memory, correction, `/forget`, the tool registry/policy gate) and Milestone 1 (Telegram capture, voice transcription, classification) are both implemented and live-verified.
 
 ## Setup
 
@@ -46,6 +48,29 @@ Milestone 2: memory and correction. On top of Milestone 1's capture pipeline, a 
    npm run dev:admin
    ```
    Then open http://localhost:4000.
+8. For Gmail/Calendar ingest, set up a Google OAuth credential:
+   1. Go to the [Google Cloud Console](https://console.cloud.google.com/), create a project (or use an existing one).
+   2. **APIs & Services → Library** — enable the **Gmail API** and **Google Calendar API**.
+   3. **APIs & Services → OAuth consent screen** — choose **External**, fill in the required fields, and add your own Google account under **Test users** (this keeps the app in testing mode, which is fine for personal use — no Google review needed).
+   4. **APIs & Services → Credentials → Create Credentials → OAuth client ID** — application type **Desktop app**. Copy the generated Client ID and Client Secret.
+   5. Put those in `.env`:
+      ```
+      GOOGLE_CLIENT_ID=...
+      GOOGLE_CLIENT_SECRET=...
+      ```
+   6. Find your Telegram chat id (message the bot once first, then):
+      ```
+      docker exec -it iris-postgres-1 psql -U iris -d iris -c "select raw_data->'chat'->>'id' from events where source='telegram' order by received_at desc limit 1;"
+      ```
+      Put it in `.env` as `TELEGRAM_OWNER_CHAT_ID`.
+   7. Run the one-time consent flow — it prints a URL, opens your Mac's Keychain access under the hood, and saves the refresh token there (never in `.env`):
+      ```
+      npm run google:auth-setup
+      ```
+   8. Restart `npm run dev:worker` — it polls Gmail and Calendar every 5 minutes from here on. Check progress via the admin UI's **Health** and **Emails** pages, or:
+      ```
+      docker exec -it iris-postgres-1 psql -U iris -d iris -c "select key, last_synced_at, last_error from sync_state;"
+      ```
 
 Message the bot on Telegram — it replies "got it." immediately. Text lands in `events` and gets classified in the background; a voice note gets transcribed first, and the transcript is then classified. A message classified as a fact or correction gets extracted into `memories` shortly after — check the admin UI or query the table directly to see it land.
 
@@ -69,12 +94,18 @@ Classification jobs failing with `connect ECONNREFUSED ::1:11434` even though Ol
 
 A worker job repeatedly fails and gives up (shows `state: 'failed'` in `select * from pgboss.job`, not `retry` or `created`): that's pg-boss's normal behavior once a job exhausts its retries — it's dead-lettered, not silently lost or endlessly retried. Fix the underlying cause (usually Ollama/Whisper not reachable) and send a new message; the old failed job stays as a permanent record and won't reprocess on its own.
 
+`npm run google:auth-setup` says "Google did not return a refresh token": Google only issues a refresh token on the first consent, unless you force it. If you've authorized this app before (even during earlier testing), revoke it at [myaccount.google.com/permissions](https://myaccount.google.com/permissions) and run the setup script again.
+
+Gmail/Calendar ingest silently does nothing: check `select * from sync_state;` — if there's no row at all, `getAuthorizedClient()` is throwing (no refresh token stored yet, run the setup script) and the worker is logging that to its own console, not the database.
+
 ## Layout
 
 - `src/bot` — Telegram long-poll process. Writes events, acknowledges instantly, enqueues background work. Does no reasoning itself.
-- `src/worker` — background process: transcription, classification, memory extraction, and (later) ingest and detectors.
-- `src/admin` — debug UI (recent events, memory inspection today; more views land with later milestones).
+- `src/worker` — background process: transcription, classification, memory extraction, Gmail/Calendar ingest, and (later) detectors.
+- `src/admin` — debug UI: events, memories, emails, and sync health.
 - `src/db` — Drizzle schema and Postgres client.
-- `src/lib` — shared core library: event ledger, queue, storage, Whisper/Ollama clients, memory (extraction/conflict-check/decay/forget), and the tool registry/policy gate/actions ledger.
+- `src/lib` — shared core library: event ledger, queue, storage, Whisper/Ollama clients, memory (extraction/conflict-check/decay/forget), the tool registry/policy gate/actions ledger, secrets (macOS Keychain), and sync-state watermarks.
+- `src/lib/google` — Gmail/Calendar API clients, OAuth, and failure classification.
+- `src/scripts` — one-off interactive scripts (Google OAuth consent flow).
 - `docker/` — local Postgres + pgvector setup.
 - `docs/` — design docs.

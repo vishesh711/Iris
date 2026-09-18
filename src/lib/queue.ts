@@ -5,6 +5,9 @@ export const QUEUES = {
   transcribe: "transcribe",
   classify: "classify",
   extractMemory: "extract-memory",
+  ingestGmail: "ingest-gmail",
+  ingestCalendar: "ingest-calendar",
+  extractEntities: "extract-entities",
 } as const;
 
 let boss: PgBoss | null = null;

@@ -86,3 +86,72 @@ export const actions = pgTable(
       .where(sql`${table.status} in ('proposed', 'approved')`),
   })
 );
+
+// People, companies, and other things emails/calendar events reference.
+// `type` (e.g. "recruiter") is what several detectors key on downstream.
+export const entities = pgTable("entities", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  type: text("type").notNull(),
+  aliases: jsonb("aliases"),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const relations = pgTable("relations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  fromEntityId: uuid("from_entity_id").references(() => entities.id),
+  toEntityId: uuid("to_entity_id").references(() => entities.id),
+  relationType: text("relation_type"),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Read-only Gmail ingest. message_id is unique so polling (which Gmail's
+// history API redelivers constantly) is a plain upsert, never a duplicate.
+export const emails = pgTable("emails", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  messageId: text("message_id").notNull().unique(),
+  threadId: text("thread_id"),
+  fromAddress: text("from_address"),
+  fromName: text("from_name"),
+  toAddresses: jsonb("to_addresses"),
+  subject: text("subject"),
+  snippet: text("snippet"),
+  bodyText: text("body_text"),
+  labels: jsonb("labels"),
+  entityId: uuid("entity_id").references(() => entities.id),
+  receivedAt: timestamp("received_at", { withTimezone: true }),
+  raw: jsonb("raw"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Read-only Calendar ingest, same upsert-on-provider-id discipline.
+export const calendarEvents = pgTable("calendar_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  providerId: text("provider_id").notNull().unique(),
+  calendarId: text("calendar_id"),
+  title: text("title"),
+  description: text("description"),
+  location: text("location"),
+  startAt: timestamp("start_at", { withTimezone: true }),
+  endAt: timestamp("end_at", { withTimezone: true }),
+  allDay: boolean("all_day"),
+  attendees: jsonb("attendees"),
+  status: text("status"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }),
+  raw: jsonb("raw"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Small persistent watermark store: Gmail's historyId, Calendar's
+// syncToken, and each source's last successful/failed poll, so the debug
+// UI can show sync lag and ingest can resume incrementally after a
+// restart instead of re-backfilling from scratch.
+export const syncState = pgTable("sync_state", {
+  key: text("key").primaryKey(),
+  value: jsonb("value"),
+  lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+  lastError: text("last_error"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
