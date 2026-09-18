@@ -6,6 +6,12 @@ Full design: [`docs/PRD.md`](docs/PRD.md). Build plan for the remaining mileston
 
 ## Status
 
+Milestones 6 and 7 (action ledger/executor and first write actions) are implemented but **not yet live-verified** — see `docs/BUILD_PLAN.md` for the full write-up. Milestone 7 in particular needs the person's explicit go-ahead before its one irreversible step (approving a real `gmail.send_draft` send), not just a code review, so it isn't marked done yet the way every earlier milestone is.
+
+Milestone 6: action ledger and shadow mode — implemented, pending live verification. A third process, the executor (`npm run dev:executor`), is now the only thing that ever runs a tool handler: `proposeAction`/`approveAction` just move an `actions` row to `approved` and return, and the executor polls for approved rows, executes them, and reconciles anything stuck in `executing` at startup back to `approved` for safe re-pickup after a crash. Approval cards are now sent directly via the Telegram Bot API (so any process can send one, not just the long-poll bot) with real inline Approve/Reject buttons. Untrusted lineage (invariant 7) is enforced for the first time: a proposal whose source event traces back through `metadata.sourceEventId` to anything tagged untrusted at Gmail ingest (M3) is forced to queue for approval regardless of the tool's own tier. Two circuit breakers exist — an `IRIS_KILL_SWITCH` env var that forces everything to queue, and an automatic halt if a tool has failed 3+ times in the last hour — deliberately narrower than originally sketched (a tier-2/hour cap and a token budget were skipped as unneeded machinery until real write-tool volume exists to size them against).
+
+Milestone 7: first write actions — implemented, pending live verification. Two new write tools: `gmail.create_draft` (tier 1, auto-approved, but scoped to replying within an existing thread only — it can never compose to a new address) and `gmail.send_draft` (tier 2, needs approval, and re-checks the contacts allowlist inside its own handler at execution time — not just as an earlier advisory check — so a forced approval still can't bypass it), plus `calendar.create_event` (tier 2). The hard idempotency case — a crash between a successful Gmail send and the DB status write — is handled using Gmail's own API semantics: a sent draft returns 404 on a follow-up fetch, which is treated as definitive proof the send already happened, so the stuck action is marked done without ever resending; if that check itself fails, the row is left for manual review rather than guessing. Undo support exists for `gmail.create_draft` and `calendar.create_event` (deletes the draft/event) via a button on the admin `/actions` page — not for `gmail.send_draft`, since there's no API to unsend a real email. An autonomy ladder (`src/lib/autonomy.ts`) can, after ≥30 decided proposals for a tool with ≥95% approval, offer (never silently apply) turning that tool fully automatic via a new `/autonomy <tool> <on|off>` command; a tool automatically loses its override if its 3 most recent decisions were all rejections.
+
 Milestone 5: rules engine and nudges — implemented and live-verified. Three deterministic SQL detectors (invariant 8: no model call decides what qualifies as a candidate) run hourly: a recruiter thread gone quiet, an upcoming calendar event mentioning "interview," and a real person's important email left unanswered. Each detector's whole candidate batch goes through exactly one relevance-filter model call (never one call per candidate) that picks 0–3 worth actually surfacing. Cooldown/backoff is structural: a second undismissed nudge can't be created for the same (rule, subject), so "fires every morning for six days" is impossible by construction — dismissing a nudge (via the admin UI's Nudges page) is what reopens the door for a fresh one later. A daily morning brief posts today's calendar events plus any open nudges, and sends nothing on a genuinely quiet day.
 
 Live-verifying this milestone surfaced a real, persistent limitation: the relevance filter reliably excludes explicit rejections, but on ambiguous automated recruiter emails it kept selecting cases where the sender explicitly said *they'd* follow up — confirmed across three rounds of prompt strengthening, the last of which the model responded to by hallucinating a worked example's text onto an unrelated real candidate. This is a firm local-model reliability ceiling on this specific compound-judgment task, not a fixable prompt issue. One category (one-time passcodes/verification emails) was clear-cut enough to exclude deterministically at the SQL level instead; the remaining ambiguous cases are accepted as-is, mitigated by the one-tap dismiss.
@@ -44,12 +50,13 @@ Earlier: Milestones 1–3 (capture, memory/correction, Gmail/Calendar ingest) ar
    WHISPER_MODEL_PATH=/absolute/path/to/ggml-base.en.bin
    ```
 5. For classification, memory extraction, and the Ask flow, run [Ollama](https://ollama.com) locally and pull a model (`ollama pull llama3.1:8b`), then set `OLLAMA_HOST` / `OLLAMA_MODEL` in `.env` if you're not using the defaults. A smaller model like `llama3.2` (3B) works for classification but was unreliable at the Ask flow's reasoning in testing — see Status above.
-6. Run the bot and the worker in separate terminals:
+6. Run the bot, the worker, and the executor in separate terminals (the executor is the only process that ever actually runs a tool handler — approving a card just marks it ready for the executor to pick up within a few seconds):
    ```
    npm run dev:bot
    npm run dev:worker
+   npm run dev:executor
    ```
-7. Optional: run the debug admin UI to browse events and memories:
+7. Optional: run the debug admin UI to browse events, memories, and the tool-call/action audit (with an Undo button for anything reversible):
    ```
    npm run dev:admin
    ```
@@ -82,6 +89,11 @@ Earlier: Milestones 1–3 (capture, memory/correction, Gmail/Calendar ingest) ar
    npm run backfill:embeddings
    ```
    New captures, memories, and emails get embedded automatically from here on — no need to re-run this except after a bulk data change.
+10. For Gmail/Calendar write actions (drafting/sending replies, creating calendar events), Iris needs write scopes beyond the read-only ones from step 8. If you already ran `google:auth-setup` before this milestone, re-run it to re-consent — the stored refresh token predates the new scopes and Google won't silently upgrade it (see the Troubleshooting note below if it says it didn't return a refresh token):
+    ```
+    npm run google:auth-setup
+    ```
+    A drafted reply and a `gmail.send_draft`/`calendar.create_event` proposal are exercised the same way as `/forget` — a real Telegram approval card, with the executor (step 6) actually performing the send/create once approved. Only a recipient who has previously emailed you can ever be sent a real message.
 
 Message the bot on Telegram — it replies "got it." immediately. Text lands in `events` and gets classified in the background; a voice note gets transcribed first, and the transcript is then classified. A message classified as a fact or correction gets extracted into `memories` shortly after — check the admin UI or query the table directly to see it land.
 
@@ -123,12 +135,13 @@ Gmail/Calendar ingest silently does nothing: check `select * from sync_state;` �
 
 ## Layout
 
-- `src/bot` — Telegram long-poll process. Writes events, acknowledges instantly, enqueues background work (including the Ask flow for question-like text). Does no reasoning itself.
+- `src/bot` — Telegram long-poll process. Writes events, acknowledges instantly, enqueues background work (including the Ask flow for question-like text), and handles approval-card taps and the `/autonomy` command. Does no reasoning itself, and never executes a tool handler directly.
 - `src/worker` — background process: transcription, classification, memory extraction, Gmail/Calendar ingest, embedding, Ask, rule detectors, and the morning brief.
-- `src/admin` — debug UI: events, memories, emails, sync health, a page to test Ask directly, and rules/nudges.
+- `src/executor` — background process that is the only thing that ever runs a tool handler: polls for approved actions, executes them, reconciles anything stuck mid-execution after a crash, and sends the completion message.
+- `src/admin` — debug UI: events, memories, emails, sync health, a page to test Ask directly, rules/nudges, and the tool-call/action audit with Undo.
 - `src/db` — Drizzle schema and Postgres client.
-- `src/lib` — shared core library: event ledger, queue, storage, Whisper/Ollama clients, memory (extraction/conflict-check/decay/forget), the tool registry/policy gate/actions ledger, secrets (macOS Keychain), sync-state watermarks, embeddings, hybrid retrieval, the Ask flow, and nudges (cooldown/dismiss).
-- `src/lib/google` — Gmail/Calendar API clients, OAuth, and failure classification.
+- `src/lib` — shared core library: event ledger, queue, storage, Whisper/Ollama clients, memory (extraction/conflict-check/decay/forget), the tool registry/policy gate/actions ledger, untrusted-lineage tracking, undo, the autonomy ladder, secrets (macOS Keychain), sync-state watermarks, embeddings, hybrid retrieval, the Ask flow, contacts allowlist, and nudges (cooldown/dismiss).
+- `src/lib/google` — Gmail/Calendar API clients (including write actions), OAuth, and failure classification.
 - `src/lib/rules` — deterministic SQL detectors and the single-call relevance filter that decides which of their candidates are actually worth surfacing.
 - `src/scripts` — one-off scripts (Google OAuth consent flow, embedding backfill) and manual triggers for jobs that otherwise only run on a cron.
 - `src/eval` — labeled evaluation scenarios, starting with the PRD's own definition-of-done question.
