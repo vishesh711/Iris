@@ -2,7 +2,7 @@ import "dotenv/config";
 import { and, eq, isNull, notInArray } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { embeddings, emails, events, memories } from "../db/schema.js";
-import { embedAndStoreChunks } from "../lib/embed-store.js";
+import { embedAndStoreChunks, removeEmbedding } from "../lib/embed-store.js";
 import { embedText } from "../lib/embeddings.js";
 import { extractMessageText } from "../lib/extract-text.js";
 
@@ -51,6 +51,22 @@ async function main() {
     }
   }
   console.log(`Embedded ${embedded} events, purged stale/excluded embeddings for ${purged} events.`);
+
+  // Ground truth for "this content is already covered by memories.embedding
+  // with supersession tracking, so it shouldn't also live on here" is
+  // supersession itself, not the classifier's label - the label can be
+  // inconsistent across near-duplicate messages (e.g. a repeated test
+  // statement mislabeled as "conversation" on one attempt), which the
+  // label-based pass above can't catch.
+  const supersededMemories = await db.select().from(memories).where(eq(memories.status, "superseded"));
+  let supersededEventsChecked = 0;
+  for (const memory of supersededMemories) {
+    for (const oldEventId of memory.sourceEventIds as string[]) {
+      await removeEmbedding("events", oldEventId);
+      supersededEventsChecked++;
+    }
+  }
+  console.log(`Checked/purged embeddings for ${supersededEventsChecked} source events of ${supersededMemories.length} superseded memories.`);
 
   const allEmails = await db.select().from(emails);
   console.log(`Backfilling ${allEmails.length} emails...`);

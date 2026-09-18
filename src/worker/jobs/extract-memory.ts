@@ -1,5 +1,6 @@
 import { getEvent, markEventProcessed, recordEvent } from "../../lib/events.js";
 import { extractMessageText } from "../../lib/extract-text.js";
+import { removeEmbedding } from "../../lib/embed-store.js";
 import { extractMemoryCandidate } from "../../lib/memory-extraction.js";
 import {
   bumpReinforcement,
@@ -30,6 +31,14 @@ export async function runExtractMemoryJob(data: ExtractMemoryJobData): Promise<v
     await markEventProcessed(event.id, { memoryExtracted: false, reason: "nothing-to-store" });
     return;
   }
+
+  // Every path below this point ends in a memory being created or
+  // reinforced, so this event's content is now captured, with proper
+  // supersession tracking, via memories.embedding - remove any raw-text
+  // embedding for it (classify.ts's label-based check is best-effort,
+  // not perfectly reliable, since the classifier itself can be
+  // inconsistent on a near-duplicate message).
+  await removeEmbedding("events", event.id);
 
   const existing = candidate.subject ? await findActiveMemoriesBySubject(candidate.subject) : [];
 
@@ -68,6 +77,15 @@ export async function runExtractMemoryJob(data: ExtractMemoryJobData): Promise<v
   if (conflict.relationship === "contradicts" && conflict.contradictedIndex !== null) {
     const superseded = existing[conflict.contradictedIndex];
     await supersedeMemory(superseded.id);
+
+    // The old statement is now superseded and must stop resurfacing
+    // anywhere - including via any raw-event embedding a prior,
+    // possibly inconsistent classification let through for the event(s)
+    // that originally produced it.
+    for (const oldEventId of superseded.sourceEventIds as string[]) {
+      await removeEmbedding("events", oldEventId);
+    }
+
     const created = await rememberFact(candidate, {
       certainty: "asserted",
       sourceEventId: event.id,

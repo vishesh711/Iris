@@ -42,3 +42,14 @@ export async function embedAndStoreChunks(
     .delete(embeddings)
     .where(and(eq(embeddings.sourceTable, sourceTable), eq(embeddings.sourceId, sourceId), gte(embeddings.chunkIndex, chunks.length)));
 }
+
+/**
+ * Removes any embedding chunks for a source — used when a raw event's
+ * content turns out to already be captured elsewhere with proper
+ * supersession tracking (memories.embedding), so it shouldn't also live
+ * on, supersession-blind, in this table. Safe to call even if nothing
+ * was ever embedded for this source.
+ */
+export async function removeEmbedding(sourceTable: EmbeddableSourceTable, sourceId: string): Promise<void> {
+  await db.delete(embeddings).where(and(eq(embeddings.sourceTable, sourceTable), eq(embeddings.sourceId, sourceId)));
+}
