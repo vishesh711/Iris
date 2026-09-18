@@ -4,14 +4,16 @@ import { desc } from "drizzle-orm";
 import express from "express";
 import { db } from "../db/client.js";
 import { actions, calendarEvents, emails, events, memories, ruleRuns, rules, syncState } from "../db/schema.js";
-import { undoAction } from "../lib/actions.js";
+import { proposeAction, undoAction } from "../lib/actions.js";
 import { answerQuestion } from "../lib/ask.js";
 import { decayWeight, type DecayClass } from "../lib/decay.js";
 import { dismissNudge, listActiveNudges } from "../lib/nudges.js";
+import { listTools } from "../lib/tools/registry.js";
 
 const PORT = Number(process.env.ADMIN_PORT ?? 4000);
 
 const app = express();
+app.use(express.urlencoded({ extended: true }));
 
 function escapeHtml(value: string): string {
   return value
@@ -39,7 +41,7 @@ function layout(title: string, body: string): string {
 </style>
 </head>
 <body>
-<nav><a href="/events">Events</a><a href="/memories">Memories</a><a href="/emails">Emails</a><a href="/health">Health</a><a href="/ask">Ask</a><a href="/nudges">Nudges</a><a href="/actions">Actions</a></nav>
+<nav><a href="/events">Events</a><a href="/memories">Memories</a><a href="/emails">Emails</a><a href="/health">Health</a><a href="/ask">Ask</a><a href="/nudges">Nudges</a><a href="/actions">Actions</a><a href="/tools">Tools</a></nav>
 <h1>${escapeHtml(title)}</h1>
 ${body}
 </body>
@@ -118,7 +120,7 @@ app.get("/emails", async (_req, res, next) => {
   try {
     const rows = await db.select().from(emails).orderBy(desc(emails.receivedAt)).limit(50);
     const body = `<table>
-<tr><th>Received</th><th>From</th><th>Subject</th><th>Snippet</th></tr>
+<tr><th>Received</th><th>From</th><th>Subject</th><th>Snippet</th><th>Thread ID</th><th></th></tr>
 ${rows
   .map(
     (row) => `<tr>
@@ -126,6 +128,12 @@ ${rows
 <td>${escapeHtml(row.fromName ?? row.fromAddress ?? "")}</td>
 <td>${escapeHtml(row.subject ?? "")}</td>
 <td>${escapeHtml(row.snippet ?? "")}</td>
+<td>${row.threadId ? escapeHtml(row.threadId) : '<span class="muted">—</span>'}</td>
+<td>${
+      row.threadId
+        ? `<a href="/tools?tool=gmail.create_draft&threadId=${encodeURIComponent(row.threadId)}">Draft reply</a>`
+        : ""
+    }</td>
 </tr>`
   )
   .join("\n")}
@@ -291,6 +299,83 @@ app.post("/actions/:id/undo", async (req, res, next) => {
   try {
     await undoAction(req.params.id);
     res.redirect("/actions");
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Manual trigger for tools that otherwise have no built-in bot command
+// (gmail.create_draft/send_draft, calendar.create_event) — goes through
+// proposeAction() exactly like any real caller would, so tier/approval/
+// egress-allowlist/undo all behave identically to a real invocation.
+// This is a deliberately blunt debug instrument (raw JSON args, no
+// schema validation beyond what each handler already does) — it exists
+// to exercise the write-tool pipeline for verification, not as a
+// permanent product surface.
+const ARG_PLACEHOLDERS: Record<string, string> = {
+  "gmail.create_draft": JSON.stringify({ threadId: "", body: "" }, null, 2),
+  "gmail.send_draft": JSON.stringify({ draftId: "" }, null, 2),
+  "calendar.create_event": JSON.stringify(
+    { title: "", description: "", location: "", startAt: "2026-01-01T10:00:00-08:00", endAt: "2026-01-01T10:30:00-08:00" },
+    null,
+    2
+  ),
+};
+
+app.get("/tools", async (req, res, next) => {
+  try {
+    const tools = listTools().filter((tool) => tool.handler);
+    const selectedTool = typeof req.query.tool === "string" ? req.query.tool : tools[0]?.name ?? "";
+    let placeholder = ARG_PLACEHOLDERS[selectedTool] ?? "{}";
+    if (selectedTool === "gmail.create_draft" && typeof req.query.threadId === "string") {
+      placeholder = JSON.stringify({ threadId: req.query.threadId, body: "" }, null, 2);
+    }
+
+    const options = tools
+      .map(
+        (tool) =>
+          `<option value="${escapeHtml(tool.name)}" ${tool.name === selectedTool ? "selected" : ""}>${escapeHtml(tool.name)} (tier ${tool.tier})</option>`
+      )
+      .join("\n");
+
+    const body = `<p class="muted">Manually propose a tool call — goes through the exact same proposeAction() path as any real caller (tier gating, approval cards, egress allowlist, undo). Tier 2 tools will produce a Telegram approval card instead of executing immediately.</p>
+<form method="post" action="/tools/propose">
+<p><label>Tool<br><select name="tool" onchange="location = '/tools?tool=' + this.value">${options}</select></label></p>
+<input type="hidden" name="toolConfirm" value="${escapeHtml(selectedTool)}">
+<p><label>Args (JSON)<br><textarea name="args" rows="6" style="width: 100%; font-family: monospace;">${escapeHtml(placeholder)}</textarea></label></p>
+<p><label>Rationale (optional)<br><input type="text" name="rationale" style="width: 100%; padding: 6px;" placeholder="Manual test via admin UI"></label></p>
+<button type="submit">Propose</button>
+</form>
+<h2>Registered tools</h2>
+<table>
+<tr><th>Tool</th><th>Tier</th><th>Description</th></tr>
+${listTools()
+  .map((tool) => `<tr><td>${escapeHtml(tool.name)}</td><td>${tool.tier}</td><td>${escapeHtml(tool.description)}</td></tr>`)
+  .join("\n")}
+</table>`;
+    res.send(layout("Tools", body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/tools/propose", async (req, res, next) => {
+  try {
+    const tool = typeof req.body.toolConfirm === "string" ? req.body.toolConfirm : "";
+    const rationale = typeof req.body.rationale === "string" && req.body.rationale.trim() ? req.body.rationale.trim() : "Manual test via admin UI";
+    let args: Record<string, unknown>;
+    try {
+      args = JSON.parse(req.body.args);
+    } catch {
+      res.status(400).send(layout("Tools", `<p>Args must be valid JSON.</p><p><a href="/tools?tool=${encodeURIComponent(tool)}">Back</a></p>`));
+      return;
+    }
+
+    const { action, decision } = await proposeAction({ tool, args, rationale });
+    const body = `<p>Proposed <code>${escapeHtml(tool)}</code> — decision: <strong>${escapeHtml(decision)}</strong>, action id <code>${escapeHtml(action.id)}</code>.</p>
+<p>${decision === "queued" ? "Check the approvals topic on Telegram for the card." : 'Check <a href="/actions">/actions</a> for the result.'}</p>
+<p><a href="/tools?tool=${encodeURIComponent(tool)}">Propose another</a></p>`;
+    res.send(layout("Tools", body));
   } catch (err) {
     next(err);
   }
