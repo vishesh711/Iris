@@ -11,7 +11,7 @@ Each milestone below reuses the existing conventions from Milestone 0/1: `record
 
 New dependencies get added incrementally per milestone (pg-boss, Ollama client, a local Whisper binary wrapper, `@xenova/transformers` for embeddings, `keytar` for OS keychain, `vitest` for tests) — never all at once.
 
-**Status:** Milestones 1 and 2 are implemented (see below). Milestones 3–7 are planned but not yet built.
+**Status:** Milestones 1 and 2 are implemented and live-verified (see below). Milestones 3–7 are planned but not yet built.
 
 ---
 
@@ -41,7 +41,7 @@ New dependencies get added incrementally per milestone (pg-boss, Ollama client, 
 
 ---
 
-## Milestone 2 — Memory and correction ✅ implemented
+## Milestone 2 — Memory and correction ✅ implemented and live-verified
 
 **Scope (PRD: memories DDL, Correct flow, tiers table):** the conflict-check, decay-at-query-time, supersession, `/forget` — and, pulled forward, the tool registry/policy gate/`actions` table, since `/forget` is tier 2.
 
@@ -63,7 +63,9 @@ New dependencies get added incrementally per milestone (pg-boss, Ollama client, 
 
 **Cross-cutting landed here:** tool registry/tiers/gate exist for the first time; `certainty` and `decay_class` are text columns constrained by TS union types at the application layer, never a float; decay is computed only at query time — no cron, no stored/rewritten score; no `user_id` anywhere.
 
-**Verified:** `npm run typecheck` and `npm test` (32 tests) both pass. Not yet verified against a live bot/Postgres/Ollama by a human — do that next: state a fact, confirm a `memories` row with correct certainty/decay_class via `/memories`; contradict it, confirm the old row flips to `superseded` and a correction event appends; `/forget` something, confirm the approval card, and that Reject leaves data untouched while Approve deletes and records `status='done'`.
+**Verified:** `npm run typecheck` and `npm test` (32 tests) both pass. Live-verified end-to-end against a real bot/Postgres/Ollama: a stated preference extracted into `memories` with `certainty='asserted'`, correct `subject`/`decay_class`; a contradicting correction ("Actually my favorite coffee order is a cortado now.") correctly flipped the old memory to `status='superseded'`, inserted the new one with `supersedes` pointing at it, and logged a `type='correction'` event; `/forget` produced a real approval card, Approve executed the deletion (`actions.status='done'`), and a separate Reject left the target memory untouched (`actions.status='rejected'`, still `active`).
+
+Two real prompt-quality bugs were found and fixed during this live verification (not caught by unit tests, since those mock the LLM call): the capture classifier needed few-shot examples to reliably label plain factual statements as `fact` rather than `conversation`, and the memory-extraction prompt needed (a) an explicit rule to use `"user"` as the subject for self-referential facts — without it, `subject` defaulted to `null` and silently disabled the conflict-check entirely — and (b) worked examples of correction-phrased input, since the model was reading "actually... now" as conversational filler and returning `null` instead of extracting the updated fact.
 
 ---
 
@@ -214,4 +216,4 @@ Each milestone section above has its own concrete test. The two checkpoints that
 
 ## Next step
 
-Milestone 3 — Gmail and Calendar read-only ingest (OAuth, history-API polling, upsert-on-provider-id, entity extraction). Before starting it, live-verify Milestone 2 against a real bot/Postgres/Ollama, per the verification note above.
+Milestone 3 — Gmail and Calendar read-only ingest (OAuth, history-API polling, upsert-on-provider-id, entity extraction).
