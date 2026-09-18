@@ -11,7 +11,7 @@ Each milestone below reuses the existing conventions from Milestone 0/1: `record
 
 New dependencies get added incrementally per milestone (pg-boss, Ollama client, a local Whisper binary wrapper, `@xenova/transformers` for embeddings, `keytar` for OS keychain, `vitest` for tests) — never all at once.
 
-**Status:** Milestones 1, 2, and 3 are implemented and live-verified (see below). Milestone 4 is implemented, pending live verification. Milestones 5–7 are planned but not yet built.
+**Status:** Milestones 1, 2, 3, and 4 are implemented and live-verified (see below). Milestones 5–7 are planned but not yet built.
 
 ---
 
@@ -100,7 +100,7 @@ Two real prompt-quality bugs were found and fixed during this live verification 
 
 ---
 
-## Milestone 4 — Unified search ✅ implemented, live-verification pending
+## Milestone 4 — Unified search ✅ implemented and live-verified
 
 **Scope (PRD: embeddings, hybrid retrieval, ranking rule, definition-of-done):** this is where the MVP's cold-start test question first becomes answerable — "who was the recruiter... what did I decide about the rate."
 
@@ -120,7 +120,14 @@ Two real prompt-quality bugs were found and fixed during this live verification 
 
 **Data model:** `embeddings` table, exact DDL from the original plan (`source_table`, `source_id`, `chunk_index`, `content`, `vector(384)`, unique on the first three). `memories` keeps using its own `embedding` column directly — never duplicated into `embeddings`.
 
-**Verified so far:** `npm run typecheck` and `npm test` pass, including a new unit test file for `chunkText()`. The retrieval/embedding/ask pipeline itself needs a live Postgres+pgvector to exercise and hasn't been run against real data yet — do that next, same as every prior milestone: run `npm run backfill:embeddings`, then `npm run eval:dod` to check the definition-of-done question resolves correctly against the user's real recruiter emails (M3) and memories (M1/M2); separately confirm a stated-then-corrected preference's search results only ever surface the current value, never the superseded one.
+**Live-verified.** `npm run typecheck` and `npm test` pass throughout. Live verification against real Gmail/Telegram data surfaced and fixed several real bugs the type/unit checks couldn't catch:
+- `gmail.ts`'s body-text extraction only undid the outer base64url transport encoding, never a part's own `Content-Transfer-Encoding: quoted-printable` — corrupting real email bodies (soft line breaks, `=XX` escapes, and — the subtler case — a sender emitting a literal multi-byte UTF-8 character on a part still labeled quoted-printable, which a string-based decode truncated into `U+FFFD`). Fixed by decoding at the byte level throughout.
+- `retrieval.ts`'s structured email/calendar search `ILIKE`'d the entire raw question as one substring pattern — a dead code path for any real question. Now extracts keywords and ranks candidates by match count (recency alone let a flood of newer, barely-relevant emails crowd out an older, highly relevant one).
+- Raw event text was being embedded into the `embeddings` table unconditionally, with no notion of supersession — correcting a fact (or hard-deleting one via `/forget`) left the old statement's raw text still searchable forever via the message leg, even though `memories` correctly excluded it. Fixed by purging a source event's embedding at the moment its memory is superseded or forgotten (`removeEmbedding()` in `embed-store.ts`), not just gating new embeds by the classifier's label (which can be inconsistent across near-duplicate messages).
+- `ollamaGenerate()` never set a temperature, so identical questions against identical, verified-correct context produced visibly different answers across runs. Set to 0.1.
+- `llama3.2` (3B) was unreliable at the Ask flow's multi-hop reasoning (e.g. connecting a paid NewtonX consulting engagement to "recruiter"/"contract role" from the PRD's own cold-start question) even with a strengthened system prompt. Switched the recommended default to `llama3.1:8b`, which answered consistently in testing.
+
+`npm run backfill:embeddings` (idempotent, also repairs pre-fix data) and `npm run eval:dod` both confirmed working against real data; a real stated-then-corrected preference's search results correctly surface only the current value.
 
 ---
 
@@ -228,4 +235,4 @@ Each milestone section above has its own concrete test. The two checkpoints that
 
 ## Next step
 
-Live-verify Milestone 4: run `npm run backfill:embeddings` then `npm run eval:dod` against real data, and confirm the supersession-excludes-from-search behavior with a real corrected preference. Then Milestone 5 — rules engine and nudges.
+Milestone 5 — rules engine and nudges.
