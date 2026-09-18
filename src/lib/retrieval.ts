@@ -14,6 +14,7 @@ export interface RetrievedItem {
 const SEMANTIC_LIMIT = 8;
 const MEMORY_LIMIT = 8;
 const STRUCTURED_LIMIT = 5;
+const STRUCTURED_CANDIDATE_LIMIT = 30;
 const RECENT_EVENTS_LIMIT = 5;
 
 function vectorParam(vector: number[]) {
@@ -46,6 +47,12 @@ export function extractKeywords(query: string): string[] {
         .filter((word) => word.length > 2 && !STOPWORDS.has(word))
     )
   );
+}
+
+/** How many of the given keywords appear in text, case-insensitively. */
+export function countKeywordMatches(text: string, keywords: string[]): number {
+  const lower = text.toLowerCase();
+  return keywords.reduce((count, word) => count + (lower.includes(word) ? 1 : 0), 0);
 }
 
 async function semanticSearch(queryVector: number[]): Promise<RetrievedItem[]> {
@@ -130,19 +137,32 @@ async function structuredEmailSearch(query: string): Promise<RetrievedItem[]> {
     return [ilike(emails.subject, pattern), ilike(emails.bodyText, pattern), ilike(emails.fromAddress, pattern)];
   });
 
-  const rows = await db
+  // Recency alone isn't relevance: a genuinely relevant older email
+  // (matching every keyword) would otherwise lose out to a flood of
+  // newer emails that happen to match just one common keyword (e.g. a
+  // recruiting-rejection email matching "role"). Pull a larger candidate
+  // pool ordered by recency, then re-rank by how many keywords each one
+  // actually matches, keeping recency only as a tiebreaker.
+  const candidates = await db
     .select()
     .from(emails)
     .where(or(...conditions))
     .orderBy(desc(emails.receivedAt))
-    .limit(STRUCTURED_LIMIT);
+    .limit(STRUCTURED_CANDIDATE_LIMIT);
 
-  return rows.map((row) => ({
-    kind: "email" as const,
-    text: `From: ${row.fromName ?? row.fromAddress}\nSubject: ${row.subject}\n${row.bodyText ?? row.snippet ?? ""}`,
-    score: 1,
-    metadata: { emailId: row.id, receivedAt: row.receivedAt },
-  }));
+  return candidates
+    .map((row) => ({
+      row,
+      matchCount: countKeywordMatches(`${row.subject ?? ""} ${row.bodyText ?? ""} ${row.fromAddress ?? ""}`, keywords),
+    }))
+    .sort((a, b) => b.matchCount - a.matchCount)
+    .slice(0, STRUCTURED_LIMIT)
+    .map(({ row, matchCount }) => ({
+      kind: "email" as const,
+      text: `From: ${row.fromName ?? row.fromAddress}\nSubject: ${row.subject}\n${row.bodyText ?? row.snippet ?? ""}`,
+      score: matchCount / keywords.length,
+      metadata: { emailId: row.id, receivedAt: row.receivedAt },
+    }));
 }
 
 async function structuredCalendarSearch(query: string): Promise<RetrievedItem[]> {
@@ -154,19 +174,26 @@ async function structuredCalendarSearch(query: string): Promise<RetrievedItem[]>
     return [ilike(calendarEvents.title, pattern), ilike(calendarEvents.description, pattern)];
   });
 
-  const rows = await db
+  const candidates = await db
     .select()
     .from(calendarEvents)
     .where(or(...conditions))
     .orderBy(desc(calendarEvents.startAt))
-    .limit(STRUCTURED_LIMIT);
+    .limit(STRUCTURED_CANDIDATE_LIMIT);
 
-  return rows.map((row) => ({
-    kind: "calendar_event" as const,
-    text: `${row.title ?? ""} — ${row.startAt?.toISOString() ?? "no date"}${row.location ? ` at ${row.location}` : ""}`,
-    score: 1,
-    metadata: { calendarEventId: row.id },
-  }));
+  return candidates
+    .map((row) => ({
+      row,
+      matchCount: countKeywordMatches(`${row.title ?? ""} ${row.description ?? ""}`, keywords),
+    }))
+    .sort((a, b) => b.matchCount - a.matchCount)
+    .slice(0, STRUCTURED_LIMIT)
+    .map(({ row, matchCount }) => ({
+      kind: "calendar_event" as const,
+      text: `${row.title ?? ""} — ${row.startAt?.toISOString() ?? "no date"}${row.location ? ` at ${row.location}` : ""}`,
+      score: matchCount / keywords.length,
+      metadata: { calendarEventId: row.id },
+    }));
 }
 
 async function recentEventsContext(): Promise<RetrievedItem[]> {
