@@ -1,15 +1,18 @@
 import "dotenv/config";
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, isNotNull, or, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { embeddings, memories } from "../db/schema.js";
+import { calendarEvents, embeddings, emails, events, memories } from "../db/schema.js";
 import { embedText } from "../lib/embeddings.js";
+import { extractKeywords } from "../lib/retrieval.js";
 
 /**
- * Ad-hoc debug tool: isolates whether running a DIFFERENT pgvector query
- * (memorySearch-shaped) immediately before the semantic-search query, in
- * the same process/connection pool, is what causes the semantic query to
- * return the right row (by id) with the wrong content - reproduced via
- * retrieve() but not via a standalone single-query script.
+ * Ad-hoc debug tool: replicates retrieve()'s exact full sequence (memory,
+ * semantic, structured email, structured calendar, recent events), and
+ * re-prints the SAME semantic-search row objects both immediately after
+ * fetching them and again after the later legs run - to check whether a
+ * later, unrelated query is somehow mutating an already-returned row's
+ * content value (as opposed to the semantic query itself ever having
+ * fetched the wrong value).
  */
 function vectorParam(vector: number[]) {
   return sql`${`[${vector.join(",")}]`}::vector`;
@@ -36,18 +39,50 @@ async function runSemanticQuery(queryVector: number[]) {
     .limit(8);
 }
 
-async function main() {
-  const queryVector = await embedText(query);
+async function runStructuredEmailQuery(q: string) {
+  const keywords = extractKeywords(q);
+  const conditions = keywords.flatMap((word) => {
+    const pattern = `%${word}%`;
+    return [ilike(emails.subject, pattern), ilike(emails.bodyText, pattern), ilike(emails.fromAddress, pattern)];
+  });
+  return db.select().from(emails).where(or(...conditions)).orderBy(desc(emails.receivedAt)).limit(30);
+}
 
-  console.log("=== Running memory query FIRST, then semantic query (same process) ===");
-  const memRows = await runMemoryQuery(queryVector);
-  console.log(`memory rows: ${memRows.length}`);
-  const semRows = await runSemanticQuery(queryVector);
-  for (const row of semRows) {
+async function runStructuredCalendarQuery(q: string) {
+  const keywords = extractKeywords(q);
+  const conditions = keywords.flatMap((word) => {
+    const pattern = `%${word}%`;
+    return [ilike(calendarEvents.title, pattern), ilike(calendarEvents.description, pattern)];
+  });
+  if (conditions.length === 0) return [];
+  return db.select().from(calendarEvents).where(or(...conditions)).orderBy(desc(calendarEvents.startAt)).limit(30);
+}
+
+async function runRecentEventsQuery() {
+  return db.select().from(events).orderBy(desc(events.receivedAt)).limit(5);
+}
+
+function printSemRows(label: string, rows: Awaited<ReturnType<typeof runSemanticQuery>>) {
+  console.log(`=== ${label} ===`);
+  for (const row of rows) {
     console.log(`id=${row.id} sourceId=${row.sourceId} chunk=${row.chunkIndex}`);
     console.log(row.content);
     console.log("---");
   }
+}
+
+async function main() {
+  const queryVector = await embedText(query);
+
+  await runMemoryQuery(queryVector);
+  const semRows = await runSemanticQuery(queryVector);
+  printSemRows("Semantic rows IMMEDIATELY after fetch", semRows);
+
+  await runStructuredEmailQuery(query);
+  await runStructuredCalendarQuery(query);
+  await runRecentEventsQuery();
+
+  printSemRows("SAME row objects AFTER the other legs ran", semRows);
 }
 
 main().catch((err) => {
