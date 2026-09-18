@@ -17,7 +17,11 @@ interface Row {
 /**
  * Deterministic SQL only (invariant 8): a recruiter thread with nothing
  * newer than the recruiter's own last message, older than the cooldown
- * window, is a follow-up candidate.
+ * window, is a follow-up candidate. Excludes verification/OTP emails
+ * outright rather than leaving that judgment to the relevance filter -
+ * a one-time passcode is unambiguously not a "waiting on your reply"
+ * case (it's also almost always already expired), so there's no reason
+ * to make a model call decide something this clear-cut.
  */
 export async function detectRecruiterFollowUp(): Promise<RuleCandidate[]> {
   const result = await db.execute<Row>(sql`
@@ -26,6 +30,10 @@ export async function detectRecruiterFollowUp(): Promise<RuleCandidate[]> {
     join entities en on en.id = e.entity_id
     where en.type = 'recruiter'
       and e.received_at < now() - (${STALE_AFTER_DAYS} * interval '1 day')
+      and e.subject not ilike '%verification code%'
+      and e.subject not ilike '%passcode%'
+      and e.subject not ilike '%one-time%'
+      and e.subject not ilike '%confirm your identity%'
       and not exists (
         select 1 from emails e2
         where e2.thread_id = e.thread_id

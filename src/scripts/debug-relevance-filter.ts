@@ -30,6 +30,10 @@ async function main() {
     join entities en on en.id = e.entity_id
     where en.type = 'recruiter'
       and e.received_at < now() - interval '1 minute'
+      and e.subject not ilike '%verification code%'
+      and e.subject not ilike '%passcode%'
+      and e.subject not ilike '%one-time%'
+      and e.subject not ilike '%confirm your identity%'
       and not exists (
         select 1 from emails e2
         where e2.thread_id = e.thread_id

@@ -31,6 +31,10 @@ export async function detectUnansweredImportantEmail(): Promise<RuleCandidate[]>
       and e.from_address not ilike '%no-reply%'
       and e.from_address not ilike '%notifications%'
       and e.from_address not ilike '%donotreply%'
+      and e.subject not ilike '%verification code%'
+      and e.subject not ilike '%passcode%'
+      and e.subject not ilike '%one-time%'
+      and e.subject not ilike '%confirm your identity%'
       and e.received_at < now() - (${STALE_AFTER_DAYS} * interval '1 day')
       and not exists (
         select 1 from emails e2
