@@ -10,6 +10,11 @@ export async function ollamaGenerate(system: string, prompt: string): Promise<st
       system,
       prompt,
       stream: false,
+      // Every caller here (classification, extraction, conflict-check,
+      // Ask) wants the same grounded, consistent answer given the same
+      // input, not creative variation - Ollama's default temperature is
+      // high enough to visibly change answers across identical runs.
+      options: { temperature: 0.1 },
     }),
   });
 

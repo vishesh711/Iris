@@ -2,6 +2,7 @@ import { and, desc, eq, ilike, inArray, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { memories } from "../db/schema.js";
 import { decayWeight, type DecayClass } from "./decay.js";
+import { removeEmbedding } from "./embed-store.js";
 import { embedText } from "./embeddings.js";
 import type { MemoryCandidate } from "./memory-extraction.js";
 import { ollamaGenerate } from "./ollama.js";
@@ -120,7 +121,20 @@ export async function executeForget(ids: string[]): Promise<{ deletedCount: numb
   if (ids.length === 0) {
     return { deletedCount: 0 };
   }
-  const deleted = await db.delete(memories).where(inArray(memories.id, ids)).returning({ id: memories.id });
+  const deleted = await db
+    .delete(memories)
+    .where(inArray(memories.id, ids))
+    .returning({ id: memories.id, sourceEventIds: memories.sourceEventIds });
+
+  // A hard-deleted memory's source event(s) must stop resurfacing too -
+  // otherwise the raw statement lives on forever via the message search
+  // leg even though the fact itself was deliberately erased.
+  for (const row of deleted) {
+    for (const eventId of row.sourceEventIds as string[]) {
+      await removeEmbedding("events", eventId);
+    }
+  }
+
   return { deletedCount: deleted.length };
 }
 
