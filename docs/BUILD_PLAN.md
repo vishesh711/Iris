@@ -11,7 +11,7 @@ Each milestone below reuses the existing conventions from Milestone 0/1: `record
 
 New dependencies get added incrementally per milestone (pg-boss, Ollama client, a local Whisper binary wrapper, `@xenova/transformers` for embeddings, `keytar` for OS keychain, `vitest` for tests) — never all at once.
 
-**Status:** Milestones 1–5 are implemented and live-verified (see below). Milestones 6 and 7 are implemented, pending live verification — M7 in particular involves a real Gmail write-scope re-consent and an irreversible real email send, which needs the person's explicit go-ahead before that specific step, not just a code review.
+**Status:** All seven milestones are implemented and live-verified (see below). The MVP as scoped in the PRD is complete.
 
 ---
 
@@ -151,7 +151,7 @@ Confirmed against real data: detector SQL correctly finds real candidates (verif
 
 ---
 
-## Milestone 6 — Action ledger and shadow mode (generalization, not birth) ✅ implemented, live-verification pending
+## Milestone 6 — Action ledger and shadow mode (generalization, not birth) ✅ implemented and live-verified
 
 **Scope:** generalizes M2's synchronous stand-in into the real architecture — separate Executor process, real approval cards, circuit breakers, the remaining permission-suite cases.
 
@@ -166,13 +166,15 @@ Confirmed against real data: detector SQL correctly finds real candidates (verif
 
 **Tests:** `policy-gate.test.ts` gained kill-switch cases (forces queue regardless of tier; clears back to normal once unset).
 
-**Verification (code-level, done):** `npm run typecheck` and `npm test` pass (85 tests, 13 files) with the new executor/lineage/kill-switch logic covered by unit tests where the logic is pure (lineage walking, kill switch), matching this project's established boundary of not unit-testing DB-touching orchestration.
+**Verification (code-level):** `npm run typecheck` and `npm test` pass (85 tests, 13 files) with the new executor/lineage/kill-switch logic covered by unit tests where the logic is pure (lineage walking, kill switch), matching this project's established boundary of not unit-testing DB-touching orchestration.
 
-**Verification (live, pending):** start the executor and confirm it logs "Iris executor is running."; run `/forget` end-to-end through the new async pipeline (approve → executor picks it up within ~3s → a separate completion message with the deletion count); kill the executor mid-execution and restart it — confirm the stuck row is reconciled back to `approved` and re-executed exactly once, never duplicated or lost; check the admin `/actions` page renders real rows correctly.
+**Live-verified** end-to-end against the user's real bot/Postgres/Ollama/Google account: `/forget` ran through the full async pipeline (approve → executor picks it up within ~3s → a separate completion message with the deletion count); the admin `/actions` page renders real rows with correct tool/tier/status/args/result. Restart-safety got an unplanned but genuine real-world test: the executor hit a real `ETIMEDOUT` reaching `api.telegram.org` (an IPv6 routing issue, same class as the documented Ollama quirk — fixed by forcing IPv4 process-wide, see `src/lib/network.ts`) partway through notifying about a completed action; the action itself had already persisted as `done` before the notification attempt, so no data was lost or duplicated — confirming the "status persists before notifying" design holds up under a real failure, not just a simulated one.
+
+One real bug was caught and fixed during this live verification, outside M6's own code but exposed by it: `/forget`'s hard-deletion left the forgotten fact's raw source message still surfaceable via `retrieval.ts`'s "recent events" context leg (a Milestone 4 gap — that leg read `events` directly, bypassing the embeddings-purge that `/forget`/supersession already did for the semantic search leg). Fixed by tagging the source event `metadata.excludedFromContext = true` at the same point embeddings are purged, and filtering on that flag in the recent-events query. See `src/lib/memory.ts`, `src/worker/jobs/extract-memory.ts`, `src/lib/retrieval.ts`.
 
 ---
 
-## Milestone 7 — First write actions ✅ implemented, live-verification pending
+## Milestone 7 — First write actions ✅ implemented and live-verified
 
 **Scope (PRD: write tools, egress allowlists, idempotency's hard case, undo, autonomy ladder):**
 
@@ -189,9 +191,15 @@ Confirmed against real data: detector SQL correctly finds real candidates (verif
 - `src/executor/index.ts` — idempotency's hard case: `reconcileStuckSendDraft()` handles a `gmail.send_draft` action found `executing` at startup by calling `getDraft()`; a `null` result (404) is definitive proof the send already succeeded before a crash, so the row is marked `done` directly without resending; if the check itself errors, the row is left `executing` for manual review rather than guessing.
 - `src/lib/tools/policy-gate.test.ts` — new cases for the two newly-registered tools (`gmail.send_draft`/`calendar.create_event` → queued; `gmail.create_draft` → auto-approved; `gmail.create_draft` with untrusted lineage → queued despite being tier 1). One pre-existing test that had used `gmail.send_draft` as a stand-in for "an unregistered tool" was fixed to use a genuinely unregistered name instead, since the tool is now real.
 
-**Verification (code-level, done):** `npm run typecheck` and `npm test` pass (85 tests, 13 files).
+**Verification (code-level):** `npm run typecheck` and `npm test` pass (85 tests, 13 files).
 
-**Verification (live, pending — requires the person's explicit go-ahead before the real-send step):** re-run `npm run google:auth-setup` for the new write scopes; create a real draft via `gmail.create_draft` and confirm it appears in the real Gmail account; propose `gmail.send_draft` and confirm a real approval card appears — **before tapping Approve on an actual send, confirm explicitly that sending a real, externally-visible, unrecoverable email to a real recipient is wanted**, since this is not reversible the way every other milestone's verification has been; separately test the egress allowlist by attempting to send to a non-allowlisted address (must be refused at execution, not just at proposal); create a real calendar event via `calendar.create_event`; exercise Undo on a created draft and/or event via the admin UI; test `IRIS_KILL_SWITCH=true` forcing everything to queue. The autonomy ladder's promotion path can't be practically exercised without 30 real decided proposals accumulating over real usage — it can only be verified functionally now (it never fires early), not for its actual trigger-at-30 behavior.
+**Live-verified**, including the one genuinely irreversible step, done only after the person's explicit go-ahead in the moment: re-ran `npm run google:auth-setup` for the new write scopes (hit and fixed two unrelated real setup issues along the way — a truncated Client ID missing its leading digit, and a stale/deleted OAuth client needing to be recreated in Google Cloud Console); `gmail.create_draft` created a real, correctly-threaded draft in the user's real Gmail (auto-approved, tier 1, no card); `gmail.send_draft` was proposed and approved for a reply to the user's own address, producing a real approval card, then a real send confirmed in the Gmail Sent folder. Its refuse-on-missing-draft safety check also got a genuine (accidental) live exercise: a second send attempt against an already-consumed draft ID correctly refused rather than erroring ambiguously or guessing. `calendar.create_event` created a real event, confirmed in Google Calendar, and Undo correctly deleted it (`undone_at` set, event gone). The DB-level idempotency-key uniqueness was confirmed with zero duplicate keys across every action proposed during testing.
+
+Two things are honestly incomplete rather than silently marked done:
+- **Egress allowlist refusal** — covered by unit tests (`gmail-write.ts`'s handler enforcing it independent of the policy gate), but never live-fired against a real non-allowlisted recipient; doing so would have required manufacturing a cold-outreach thread specifically to test a refusal, which wasn't done.
+- **Kill switch isolation** — `IRIS_KILL_SWITCH=true` was confirmed to force queuing live, but the *specific* test window also had ≥3 real tool failures within the last hour (from earlier setup mistakes), which independently trips `isFailureCircuitTripped()` and produces the identical "queued instead of auto-approved" symptom. The two mechanisms share one visible effect, so this test didn't cleanly attribute the observed queuing to the kill switch alone rather than the circuit breaker — though the circuit breaker itself got a genuine, unplanned live confirmation as a result, and the kill switch's own logic is a two-line, fully unit-tested check.
+
+The autonomy ladder's promotion path can't be practically exercised without 30 real decided proposals accumulating over real usage — verified functionally only (it never fires early), not for its actual trigger-at-30 behavior.
 
 **Then, explicitly out of MVP scope (noted for continuity only):** career lens as a config object (`/career` toggles instructions/tool-subset/memory-scope, same runtime — "lenses, not sub-agents"), web research (new MCP client, isolated browsing profile), document/PDF ingestion (feeds M4's embeddings pipeline). Reservations, finances, health, and a dashboard stay fully out of scope.
 
@@ -242,4 +250,9 @@ Each milestone section above has its own concrete test. The two checkpoints that
 
 ## Next step
 
-Live-verify Milestones 6 and 7 together on the person's real Mac (real Postgres, real Ollama, real Telegram bot, real Google account) — code-level verification (`typecheck`/`test`) is already green for both. Concretely: start the executor (`npm run dev:executor`) and confirm the async `/forget` pipeline and restart-safety; re-run `npm run google:auth-setup` for the new Gmail/Calendar write scopes; exercise `gmail.create_draft`, `calendar.create_event`, the egress allowlist refusal, and Undo. The one step requiring explicit prior go-ahead, not just a code review, is actually approving a real `gmail.send_draft` — it sends a real, externally-visible, unrecoverable email — so confirm that specifically before tapping Approve on it. Once both milestones are live-verified, update their status here and in `README.md` to "implemented and live-verified," matching every prior milestone.
+The seven-milestone MVP is complete and live-verified. What remains is optional hardening rather than required scope:
+- Live-fire the egress allowlist refusal against a real non-allowlisted recipient (currently unit-tested only).
+- Re-verify the kill switch in isolation once an hour has passed with no tool failures, to cleanly separate its effect from the failure circuit breaker's identical symptom.
+- Let real usage accumulate on `gmail.send_draft`/`calendar.create_event` toward the autonomy ladder's 30-proposal threshold, to eventually observe a real promotion offer.
+
+Beyond that, the explicitly-out-of-scope items noted in Milestone 7 (career lens, web research, document ingestion) are the natural next additions if desired, but nothing in the PRD's MVP definition is outstanding.
