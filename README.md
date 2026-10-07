@@ -62,7 +62,7 @@ Earlier: Milestones 1–3 (capture, memory/correction, Gmail/Calendar ingest) ar
    ```
    npm run dev:admin
    ```
-   Then open http://localhost:4000.
+   Then open http://localhost:4000. The same server also exposes a minimal JSON API — `POST /api/ask` and `GET /api/nudges` — for the native macOS client scaffold in `apple-client/` (see its own README; it's an early, unbuilt-on-this-machine draft, not a finished app).
 8. For Gmail/Calendar ingest, set up a Google OAuth credential:
    1. Go to the [Google Cloud Console](https://console.cloud.google.com/), create a project (or use an existing one).
    2. **APIs & Services → Library** — enable the **Gmail API** and **Google Calendar API**.
@@ -140,7 +140,8 @@ Gmail/Calendar ingest silently does nothing: check `select * from sync_state;` �
 - `src/bot` — Telegram long-poll process. Writes events, acknowledges instantly, enqueues background work (including the Ask flow for question-like text), and handles approval-card taps and the `/autonomy` command. Does no reasoning itself, and never executes a tool handler directly.
 - `src/worker` — background process: transcription, classification, memory extraction, Gmail/Calendar ingest, embedding, Ask, rule detectors, and the morning brief.
 - `src/executor` — background process that is the only thing that ever runs a tool handler: polls for approved actions, executes them, reconciles anything stuck mid-execution after a crash, and sends the completion message.
-- `src/admin` — debug UI: events, memories, emails, sync health, a page to test Ask directly, rules/nudges, and the tool-call/action audit with Undo.
+- `src/admin` — debug UI: events, memories, emails, sync health, a page to test Ask directly, rules/nudges, and the tool-call/action audit with Undo. Also exposes a minimal `/api/*` JSON surface (`/api/ask`, `/api/nudges`) for `apple-client/`.
+- `apple-client/IrisClient` — a native macOS SwiftUI scaffold (ask Iris a question, see open nudges) against the admin server's `/api/*` routes. **Written, not yet built or run** — there's no Swift toolchain in this development environment, so it hasn't been compiled on a real Mac yet. See its own README for status and next steps.
 - `src/db` — Drizzle schema and Postgres client.
 - `src/lib` — shared core library: event ledger, queue, storage, Whisper/Ollama clients, memory (extraction/conflict-check/decay/forget), the tool registry/policy gate/actions ledger, untrusted-lineage tracking, undo, the autonomy ladder, secrets (macOS Keychain), sync-state watermarks, embeddings, hybrid retrieval, the Ask flow, contacts allowlist, and nudges (cooldown/dismiss).
 - `src/lib/google` — Gmail/Calendar API clients (including write actions), OAuth, and failure classification.

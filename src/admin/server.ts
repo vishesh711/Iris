@@ -14,6 +14,7 @@ const PORT = Number(process.env.ADMIN_PORT ?? 4000);
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 
 function escapeHtml(value: string): string {
   return value
@@ -190,6 +191,44 @@ app.get("/ask", async (req, res, next) => {
     const answer = await answerQuestion(question);
     const body = `${form}<h2>Question</h2><p>${escapeHtml(question)}</p><h2>Answer</h2><pre>${escapeHtml(answer)}</pre>`;
     res.send(layout("Ask", body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// JSON API, kept deliberately minimal — the first integration point for a
+// native client (e.g. a SwiftUI app) rather than a full API surface. Reuses
+// the exact same ask/nudges logic the HTML admin pages already call, so
+// there's no second code path to keep in sync.
+app.get("/api/health", (_req, res) => {
+  res.json({ status: "ok" });
+});
+
+app.post("/api/ask", async (req, res, next) => {
+  try {
+    const question = typeof req.body?.question === "string" ? req.body.question : "";
+    if (!question.trim()) {
+      res.status(400).json({ error: "question is required" });
+      return;
+    }
+    const answer = await answerQuestion(question);
+    res.json({ question, answer });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/api/nudges", async (_req, res, next) => {
+  try {
+    const activeNudges = await listActiveNudges();
+    res.json({
+      nudges: activeNudges.map((n) => ({
+        id: n.id,
+        title: n.title,
+        body: n.body,
+        sentAt: n.sentAt,
+      })),
+    });
   } catch (err) {
     next(err);
   }
@@ -379,6 +418,18 @@ app.post("/tools/propose", async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+// JSON error responses for the native-client API surface — everything
+// else on this server is the HTML debug UI, which keeps Express's default
+// HTML error page; a native client needs a parseable error body instead.
+app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (!req.path.startsWith("/api/")) {
+    next(err);
+    return;
+  }
+  console.error(err);
+  res.status(500).json({ error: err.message });
 });
 
 app.listen(PORT, () => {
